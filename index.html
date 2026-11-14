@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>recalm</title>
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <header class="app-header">
+    <h1 class="brand"><a href="#home" data-view="home">recalm</a></h1>
+    <!-- 今日の累計勝敗。「今日」の文字は出さず、読み上げ用ラベルとツールチップに持たせる(設計書 F3) -->
+    <div class="today-chip" id="today-chip"></div>
+    <!-- 自動で出る事実は、入力欄に置かず、メニューバーの右に枠なしで並べる(設計書 簡易入力の設計 1) -->
+      <div class="auto-facts" aria-label="自動で記録される情報">
+        <span class="now-chip" id="now-chip"></span>
+        <span class="fact" id="peak-tag"></span>
+        <span class="hint">
+          <button type="button" class="hint-btn" aria-describedby="peak-hint" aria-label="ピークタイムの説明">?</button>
+          <span role="tooltip" id="peak-hint" class="hint-body"></span>
+        </span>
+      </div>
+    <nav class="app-nav" aria-label="画面">
+      <a href="#home" data-view="home" title="記録(Alt+1)" aria-label="記録" aria-keyshortcuts="Alt+1"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20l1-4L16.5 4.5a2 2 0 0 1 3 3L8 19z"/><path d="M14.5 6.5l3 3"/></svg><span class="nav-label" aria-hidden="true">記録</span></a>
+      <a href="#matches" data-view="matches" title="履歴(Alt+2)" aria-label="履歴" aria-keyshortcuts="Alt+2"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1L3.5 8.5"/><path d="M3.5 4v4.5H8M12 7.5V12l3 2"/></svg><span class="nav-label" aria-hidden="true">履歴</span></a>
+      <a href="#stats" data-view="stats" title="集計(Alt+3)" aria-label="集計" aria-keyshortcuts="Alt+3"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20v-8M12 20V4M19 20v-5" stroke-width="3.2"/></svg><span class="nav-label" aria-hidden="true">集計</span></a>
+    </nav>
+    <!-- 設定はたまにしか使わないので、ナビから離して右端に置く(設計書 簡易入力の設計 1) -->
+    <a class="app-settings" href="#settings" data-view="settings" title="設定(Alt+4)" aria-label="設定" aria-keyshortcuts="Alt+4"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg></a>
+  </header>
+
+  <div id="fatal" class="fatal" hidden></div>
+
+  <main id="view-home" hidden>
+    <!-- 記録が0件のときだけ出す、説明ページ(about.html)への案内。カーソルを合わせると吹き出しで出す(設計書「簡易入力の設計」) -->
+    <div class="welcome" id="welcome" hidden>
+      <div class="hint">はじめての方へ
+        <button type="button" class="hint-btn" aria-describedby="welcome-body" aria-label="はじめての方へ">?</button>
+        <div role="tooltip" id="welcome-body" class="hint-body">
+          <p>試合のあとに動きと気持ちを書き出して、落ち着いてゲームを楽しむための記録アプリです。</p>
+          <p>記録はこのブラウザ内だけに保存します。</p>
+          <p><a href="about.html">recalm について(使い方)</a> · <button type="button" class="link" id="open-tour">使い方ツアーを見る</button></p>
+        </div>
+      </div>
+    </div>
+    <!-- 問いかけ入力(設計書「簡易入力の設計」)。入力欄は1つで、上に出る問いに順に答える -->
+    <section class="panel ask-panel" id="match-form" aria-labelledby="form-title">
+      <h2 id="form-title" class="visually-hidden">試合を記録する</h2>
+      <ol class="ask-done" id="ask-done" aria-label="答えた問い"></ol>
+      <p class="ask-resume muted" id="ask-resume" hidden></p>
+      <p class="ask-saved" id="ask-saved" role="status" hidden>✓ 振り返りを保存しました</p>
+      <div class="ask-head">
+        <p class="ask-q" id="ask-q"></p>
+        <span class="ask-step muted" id="ask-step"></span>
+      </div>
+      <p class="ask-sub muted" id="ask-sub"></p>
+      <div class="ask-bar">
+        <textarea id="ask-input" class="ask-input" rows="1" maxlength="300" aria-labelledby="ask-q" aria-describedby="ask-sub" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+        <button type="button" id="ask-send" class="ask-send">次へ</button>
+      </div>
+      <p class="text-count muted" id="ask-count" hidden></p>
+      <p class="ask-cur muted" id="ask-cur" hidden></p>
+      <div class="group-tabs" id="ask-groups" hidden></div>
+      <ul class="ask-opts" id="ask-opts" role="listbox" aria-label="候補"></ul>
+      <div class="ask-keys" id="ask-keys"></div>
+      <p class="ask-reset"><button type="button" class="link" id="reset-form">入力をリセット</button><button type="button" class="link" id="undo-save" hidden>保存を取り消す</button></p>
+    </section>
+    <!-- 次に試すこと。いちばん新しい次の行動を1件だけ、左線と区切り線で分けた控えめな表示で出す(設計書「簡易入力の設計」) -->
+    <section class="prev-imp" id="prev-imp" aria-labelledby="prev-imp-title" hidden>
+      <div class="prev-imp-top">
+        <div class="prev-imp-main">
+          <h2 id="prev-imp-title">次に試すこと</h2>
+          <p class="prev-imp-text" id="prev-imp-text"></p>
+        </div>
+        <a href="#matches" id="prev-imp-more">振り返りをもっと見る</a>
+      </div>
+      <p class="muted prev-imp-from" id="prev-imp-from" hidden></p>
+      <p class="muted prev-imp-sub" id="prev-imp-meta"></p>
+    </section>
+
+  </main>
+
+  <main id="view-matches" hidden>
+    <!-- 「まとめ」(ロール別の勝敗と、振り返りを日をまたいで並べた一覧)と「試合一覧」(1日ずつの試合の一覧)を切り替える(設計書 画面設計 履歴) -->
+    <div class="seg history-mode" role="group" aria-label="表示">
+      <button type="button" id="mode-review" data-mode="review">まとめ</button>
+      <button type="button" id="mode-games" data-mode="games">試合一覧</button>
+    </div>
+    <section class="panel" id="review-panel" aria-labelledby="review-title" hidden>
+      <h2>ロール別の勝敗 <span class="muted small-label">全期間</span></h2>
+      <div class="role-records" id="role-records"></div>
+      <h2 id="review-title">振り返り</h2>
+      <div class="review-filters" id="review-filters"></div>
+      <ol class="review-list" id="review-list"></ol>
+      <p class="list-note muted" id="review-missing" hidden></p>
+    </section>
+    <section class="panel" id="games-panel" aria-labelledby="matches-title">
+      <div class="list-head">
+        <button type="button" class="icon-btn" id="day-prev" aria-label="前の日">‹</button>
+        <h2 id="matches-title" aria-live="polite" tabindex="-1"></h2>
+        <button type="button" class="icon-btn" id="day-next" aria-label="次の日">›</button>
+      </div>
+      <div class="day-sub" id="matches-sub"></div>
+      <ol id="matches-list" class="match-list"></ol>
+    </section>
+  </main>
+
+  <dialog id="match-dialog" aria-labelledby="match-dialog-title"></dialog>
+
+  <!-- 集計(F5)。はじめは上から、成功の判定=負けた試合の次に試すことの記入率、気持ちの記入率、セッション開始からの経過時間別の勝率、時間帯別の勝率(設定の「集計の並び順」で勝率を先にできる。並べ替えは app.js)。勝率には必ず試合数を添える。注意書きは見出し横の「?」に入れる -->
+  <main id="view-stats" hidden>
+    <p class="stats-scope muted" id="stats-scope" hidden></p>
+    <p class="stats-today" id="stats-today" hidden></p>
+    <div class="stats-few" id="stats-few" hidden></div>
+    <section class="panel" id="stats-session-panel" aria-labelledby="stats-session-title">
+      <h2><span id="stats-session-title">セッション開始からの経過時間で分けた勝率</span>
+        <span class="hint">
+          <button type="button" class="hint-btn" aria-describedby="stats-session-hint" aria-label="グラフの読み方とセッションの区切り">?</button>
+          <span role="tooltip" id="stats-session-hint" class="hint-body"></span>
+        </span>
+      </h2>
+      <div id="stats-session"></div>
+    </section>
+    <section class="panel" id="stats-time-panel" aria-labelledby="stats-time-title">
+      <h2><span id="stats-time-title">時間帯別の勝率</span>
+        <span class="hint">
+          <button type="button" class="hint-btn" aria-describedby="stats-time-hint" aria-label="時間帯の判定と注意点">?</button>
+          <span role="tooltip" id="stats-time-hint" class="hint-body"></span>
+        </span>
+      </h2>
+      <div id="stats-time"></div>
+    </section>
+    <section class="panel" id="stats-impr-panel" aria-labelledby="stats-impr-title">
+      <h2><span id="stats-impr-title">次に試すことを書けた割合(負けた試合)</span>
+        <span class="hint">
+          <button type="button" class="hint-btn" aria-describedby="stats-impr-hint" aria-label="次に試すことを書けた割合の説明">?</button>
+          <span role="tooltip" id="stats-impr-hint" class="hint-body"></span>
+        </span>
+      </h2>
+      <div id="stats-impr"></div>
+    </section>
+    <section class="panel" id="stats-feel-panel" aria-labelledby="stats-feel-title">
+      <h2><span id="stats-feel-title">気持ちを書いた割合</span>
+        <span class="hint">
+          <button type="button" class="hint-btn" aria-describedby="stats-feel-hint" aria-label="気持ちを書いた割合の説明">?</button>
+          <span role="tooltip" id="stats-feel-hint" class="hint-body"></span>
+        </span>
+      </h2>
+      <div id="stats-feel"></div>
+    </section>
+  </main>
+
+  <main id="view-settings" hidden>
+    <section class="panel" aria-labelledby="backup-title">
+      <h2 id="backup-title">バックアップ</h2>
+      <p><b>書き出したファイルがあれば、別の端末や機種変更の後でも、読み込んで記録を戻せます。</b></p>
+      <p class="muted">ブラウザのサイトデータを消すと、記録も消えます。ときどき書き出してください。ファイルの保存先はブラウザで決まります(iPhone の Safari では、ふつう「ファイル」アプリの「ダウンロード」)。</p>
+      <p id="backup-status"></p>
+      <div class="row">
+        <button type="button" class="primary" id="backup-export">書き出す</button>
+        <button type="button" id="backup-import">読み込む…</button>
+        <input type="file" id="backup-file" accept=".json,application/json" hidden>
+      </div>
+      <div id="autosave-folder">
+        <h3 class="autosave-title">フォルダへの自動保存</h3>
+        <p class="muted">記録を変えるたびに、選んだフォルダの recalm-backup.json を上書きします。Google Drive for desktop などの同期フォルダを選ぶと、そのソフトがクラウドへ同期します(このアプリから外部へは送信しません)。</p>
+        <p id="autosave-status"></p>
+        <div class="row">
+          <button type="button" id="autosave-pick">フォルダを選ぶ…</button>
+          <button type="button" class="primary" id="autosave-reconnect" hidden>再接続</button>
+          <button type="button" id="autosave-stop" hidden>やめる</button>
+        </div>
+      </div>
+      <!-- フォルダを選べないブラウザ(Firefox など)では、こちらを出す(設計書 F8) -->
+      <div id="autodl" hidden>
+        <h3 class="autosave-title">ダウンロードフォルダへの自動保存</h3>
+        <p class="muted">このブラウザではフォルダのファイルを上書きできないため、試合を記録して最後の問いまで終えたとき(入力の途中では保存しません)に、ダウンロードフォルダへ日時つきのファイルを保存します。</p>
+        <p class="muted">保存先はブラウザのダウンロードの設定で決まります(専用のフォルダにしたいときは、ブラウザのダウンロード先を変えてください)。Google Drive の同期フォルダにすると、Drive にも残ります。ファイルは記録のたびに増えますが、いちばん新しいファイルにすべての記録が入っているので、古いものは消してかまいません。</p>
+        <p class="muted">ブラウザの履歴(Cookie とサイトデータ)は削除しないでください。記録も消えます。閉じるときに自動で削除する設定にしている場合は、このサイトを例外に加えてください。</p>
+        <p class="muted">Firefox で、ダウンロードのたびに一覧が開くのが気になるときは、アドレスバーに <code>about:config</code> と入れ、<code>browser.download.alwaysOpenPanel</code> を <code>false</code> にすると開かなくなります。</p>
+        <label class="inline"><input type="checkbox" id="autodl-enabled"> 試合と振り返りを記録するたびに、自動でダウンロードする</label>
+        <p id="autodl-status"></p>
+      </div>
+      <p class="muted small-note">読み込むと、いまの記録をすべて置き換えます。書き出したファイルには自分の記録がそのまま入っています。</p>
+    </section>
+    <!-- 表示(設計書 画面設計 設定・F3・F5)。目的(感情的にならずに楽しむ)に合わせた初期値にし、切り替えられるようにする -->
+    <section class="panel" aria-labelledby="display-title">
+      <h2 id="display-title">表示</h2>
+      <fieldset class="pref">
+        <legend>今日の表示(メニューバーと集計)</legend>
+        <label class="inline"><input type="radio" name="pref-today" value="count"> 試合数だけ</label>
+        <label class="inline"><input type="radio" name="pref-today" value="record"> 勝敗</label>
+        <label class="inline"><input type="radio" name="pref-today" value="none"> 出さない</label>
+      </fieldset>
+      <fieldset class="pref">
+        <legend>集計の並び順</legend>
+        <label class="inline"><input type="radio" name="pref-stats" value="habit"> 書けた割合を先に</label>
+        <label class="inline"><input type="radio" name="pref-stats" value="winrate"> 勝率を先に</label>
+      </fieldset>
+      <p class="muted small-note">はじめは、勝ち負けより振り返りの習慣が目に入るようにしています。</p>
+    </section>
+    <p class="small-note"><a href="about.html">recalm について(使い方)</a></p>
+    <p class="muted small-note" id="disclaimer">本アプリケーションは個人が開発した非公式のファンアプリであり、Blizzard Entertainment社とは一切関係ありません。<br>Overwatchをはじめとするゲームタイトル、ロゴ、および関連するすべての知的財産は、Blizzard Entertainment, Inc.に帰属します。</p>
+  </main>
+
+  <footer class="app-footer" id="footer" hidden>
+    <p>記録はこのブラウザ内(IndexedDB)だけに保存され、外部には送信しません。ブラウザのサイトデータを消すと記録も消えます。<a href="about.html">recalm について</a></p>
+    <p id="backup-nudge" hidden></p>
+  </footer>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <!-- 初回起動時の使い方ツアー(設計書「簡易入力の設計」 案B: 薄く透過したオーバーレイ + Enter/Esc で即閉じる) -->
+  <div id="tour-overlay" hidden>
+    <div class="tour-backdrop" id="tour-backdrop"></div>
+    <div class="tour-layer">
+      <div class="tour-card" role="dialog" aria-modal="true" aria-labelledby="tour-title">
+        <div class="tour-top">
+          <span>はじめての方へ</span>
+          <button type="button" class="tour-skip" id="tour-close" aria-label="閉じる">× (Esc)</button>
+        </div>
+        <h2 class="tour-title" id="tour-title">recalm へようこそ</h2>
+        <p class="tour-desc">感情的にならずゲームを楽しむための、手入力の記録アプリです。</p>
+        <ul class="tour-list">
+          <li>
+            <span class="tour-num">1</span>
+            <div>
+              <strong>1問ずつ、30秒で記録</strong>
+              <span>気持ち → 結果 → マップ → ヒーローの順に Enter で進みます。</span>
+            </div>
+          </li>
+          <li>
+            <span class="tour-num">2</span>
+            <div>
+              <strong>次の動きを1つだけ残す</strong>
+              <span>試合の最後に1問だけ振り返り。次の試合の前に表示されます。</span>
+            </div>
+          </li>
+          <li>
+            <span class="tour-num">3</span>
+            <div>
+              <strong>データはこのブラウザ内だけ</strong>
+              <span>外部へ送信しません。右上の「?」や設定からいつでも確認できます。</span>
+            </div>
+          </li>
+        </ul>
+        <div class="tour-foot">
+          <span class="muted tour-hint">Enter / Esc で閉じられます</span>
+          <button type="button" class="primary" id="tour-start">はじめる</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

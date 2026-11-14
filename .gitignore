@@ -1,0 +1,16 @@
+# 個人の記録(バックアップJSON)はコミットしない
+recalm-backup*.json
+backups/
+
+# 秘密情報
+.env
+.env.*
+
+# 画像(Blizzardのマップ・ヒーロー画像はリポジトリに入れない)
+img/maps/
+img/heroes/
+
+node_modules/
+.claude/
+
+.vercel
