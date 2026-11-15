@@ -14,3 +14,10 @@ node_modules/
 .claude/
 
 .vercel
+
+# 開発用ドキュメント・設定(手元のみ残す)
+docs/
+CLAUDE.md
+AGENTS.md
+PRODUCT.md
+.vercelignore
