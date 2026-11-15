@@ -683,6 +683,7 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: var(--fs-sm); 
 
 /* ---------- フッターとトースト ---------- */
 .app-footer { color: var(--muted); font-size: var(--fs-sm); margin-top: var(--s4); padding-top: var(--s3); padding-bottom: var(--s6); border-top: 1px solid var(--border); }
+.github-link { display: inline-flex; align-items: center; gap: 4px; vertical-align: text-bottom; }
 
 .toast {
   position: fixed; left: 50%; bottom: calc(var(--nav-h) + var(--s5)); transform: translate(-50%, 8px);
