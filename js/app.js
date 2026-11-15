@@ -64,7 +64,7 @@ const state = {
   display: { ...DISPLAY_DEFAULTS }, // 表示の設定(config.js の DISPLAY_META_KEY)
   // listDay: 履歴で見ている1日(null は今日)。sel: 問いかけ入力で選んでいる候補・段階の位置(-1 は選んでいない)
   // historyMode: 履歴の表示('review' まとめ / 'games' 試合一覧。開いたときはまとめ)。reviewResult・reviewHero: 振り返りの絞り込み('all' はすべて)
-  ui: { listDay: null, sel: -1, group: null, showGroups: false, saving: false, typed: null, keysOpen: false, resumed: false, pausedUntil: 0, welcome: false, historyMode: 'review', reviewResult: 'all', reviewHero: 'all' },
+  ui: { listDay: null, sel: -1, browseGroup: null, browseSel: 0, browseByInput: false, saving: false, typed: null, keysOpen: false, resumed: false, pausedUntil: 0, welcome: false, historyMode: 'review', reviewResult: 'all', reviewHero: 'all' },
   timer: { startedAt: null, clicks: 0, keys: 0 }, // clicks = 候補などを押した回数、keys = Enter・数字キーで決めた回数
 };
 
@@ -211,6 +211,10 @@ function bindEvents() {
 
   window.addEventListener('hashchange', showView);
 
+  // マップ・ヒーロー一覧オーバーレイ(設計書 F1・F2)
+  $('#browse-backdrop').addEventListener('click', () => closeBrowse());
+  $('#browse-close').addEventListener('click', () => closeBrowse());
+
   // 初回起動時の使い方ツアー(案B)
   $('#tour-backdrop').addEventListener('click', closeTour);
   $('#tour-close').addEventListener('click', closeTour);
@@ -326,7 +330,8 @@ function stepDef(id) {
     return {
       kind: 'pick', short: 'マップ', q: 'マップは?', sub: `英語の名前のほか、いりおす・イリオス・iriosu でも打てます。${pickHow()}`,
       example: 'ilios', items: state.master.maps,
-      // マップは連続で同じものが来にくいため「最近」は出さず、常にモードのボタンを並べ、押したモードのマップだけを下に出す(設計書 F1)
+      browseKey: 'map', browseTitle: 'マップを選ぶ', browseOpenLabel: 'マップ一覧を開く', browseSwitchLabel: 'モード切替',
+      // マップは連続で同じものが来にくいため「最近」は出さず、控えめなリンク・map入力・/ / Ctrl+Space で一覧オーバーレイを開く(設計書 F1)
       recent: () => [],
       groups: () => state.master.modes.map((m) => ({
         id: m.id,
@@ -341,7 +346,8 @@ function stepDef(id) {
     return {
       kind: 'pick', short: 'ヒーロー', q: '使ったヒーローは?', sub: `ロールはヒーローから決まります。答えると試合を保存します。${pickHow()}`,
       example: 'tracer', items: state.master.heroes,
-      // 「最近」がまだないとき(はじめて記録するとき)は、ロールのボタンだけ出し、押したロールのヒーローだけを名前順で下に出す(設計書 F2)
+      browseKey: 'hero', browseTitle: 'ヒーローを選ぶ', browseOpenLabel: 'ヒーロー一覧を開く', browseSwitchLabel: 'ロール切替',
+      // 空欄のときは「最近」を出し、その下の固定位置のリンク・hero入力・/ / Ctrl+Space で一覧オーバーレイを開く(設計書 F2)
       recent: () => heroUsage(state.matches, state.slots).recent.map((x) => state.heroById.get(x)).filter(Boolean).slice(0, RECENT_HEROES),
       groups: () => ROLES.map((r) => ({
         id: r.id,
@@ -386,20 +392,12 @@ function answerColor(id, v) {
 const askStepsNow = () => askSteps(state.ask.answers.result);
 const askInput = () => $('#ask-input');
 
-// 候補(pick の問い)。空のときは「最近」(なければグループタブで開いたもの)、打ったら名前か読みの一致するもの
+// 候補(pick の問い)。空のときは「最近」、打ったら名前か読みの一致するもの
 // Tab で候補の名前に変換した後も、変換前に打った文字(state.ui.typed)で絞ったままにする
 function askCandidates(def) {
   const q = state.ui.typed ?? askInput().value;
   if (def.scale) return def.items;
-  if (!q.trim()) {
-    if (def.groups && state.ui.group) {
-      const g = def.groups().find((x) => x.id === state.ui.group);
-      if (g) return g.items;
-    }
-    const recent = def.recent();
-    if (recent.length) return recent;
-    return [];
-  }
+  if (!q.trim()) return def.recent();
   const recent = def.items === state.master.heroes ? heroUsage(state.matches, state.slots).recent
     : def.items === state.master.maps ? recentMapIds(state.matches) : [];
   return searchByName(def.items, q, recent).slice(0, 8);
@@ -408,8 +406,7 @@ function askCandidates(def) {
 function resetAsk() {
   state.ask = emptyAsk();
   state.ui.resumed = false;
-  state.ui.group = null;
-  state.ui.showGroups = false;
+  closeBrowse({ restoreFocus: false });
   state.ui.sel = -1;
   state.ui.typed = null;
   state.timer = { startedAt: null, clicks: 0, keys: 0 };
@@ -444,8 +441,7 @@ function resetAskWithUndo() {
 function goAsk(id) {
   state.ask.step = id;
   state.ui.resumed = false;
-  state.ui.group = null;
-  state.ui.showGroups = false;
+  closeBrowse({ restoreFocus: false });
   askInput().value = '';
   state.ui.typed = null;
   // 空欄では候補を選んだ状態にしない(空の Enter で「最近」の先頭を黙って決めないため。↓ で選べば決められる)
@@ -945,11 +941,15 @@ function renderAskKeys(def, has) {
   const back = undo ? ' 保存を取り消す' : ' 前へ';
   const main = def.kind === 'text'
     ? [[k('Enter'), ' 次へ'], [k('Shift'), '+', k('Enter'), ' 改行'], ['空で ', k('←'), back]]
-    : [[k('Tab'), ' 変換'], [k('Enter'), ' 決める'], ['空で ', k('←'), back]];
+    : def.groups
+      ? [[k('Tab'), ' 変換'], [k('Enter'), ' 決める'], [k('/'), ` ${def.browseOpenLabel}`], ['空で ', k('←'), back]]
+      : [[k('Tab'), ' 変換'], [k('Enter'), ' 決める'], ['空で ', k('←'), back]];
   const all = [
     def.kind === 'text' ? [[k('Enter')], '次へ(空ならとばす)'] : [[k('Tab')], '選んでいる候補に変換(もう一度で次の候補)'],
     def.kind === 'text' ? [[k('Shift'), '+', k('Enter')], '改行'] : [[k('↓'), k('↑')], '候補を選ぶ'],
     def.kind === 'text' ? null : [[k('Enter')], `決める${def.optional ? '(空のままならとばす)' : ''}`],
+    def.groups ? [[k('/'), ' / ', k('Ctrl'), '+', k('Space')], def.browseOpenLabel] : null,
+    def.browseKey ? [[k(def.browseKey)], ` と打って${def.browseOpenLabel}`] : null,
     has ? [['空で ', k('Tab')], 'いまの答えを書き直す'] : null,
     [['空で ', k('←'), ' / ', k('Backspace')], undo ? '保存を取り消して、ヒーローの問いに戻る' : '前の問いへ'],
     [['空で ', k('→')], '次の問いへ'],
@@ -983,55 +983,28 @@ function renderAskOpts() {
   const def = stepDef(state.ask.step);
   const typed = (state.ui.typed ?? askInput().value).trim();
   const hasRecent = def.kind === 'pick' && def.recent().length > 0;
-  const groups = def.kind === 'pick' && def.groups && !typed && (!hasRecent || state.ui.showGroups) ? def.groups() : null;
-  const groupBox = $('#ask-groups');
-  groupBox.hidden = !groups;
-  fill(groupBox, groups ? [
-    ...groups.map((g) => h('button', {
-      type: 'button', class: 'group-tab', 'aria-pressed': String(state.ui.group === g.id),
-      onclick: () => {
-        state.ui.group = state.ui.group === g.id ? null : g.id;
-        state.ui.sel = -1;
-        renderAskOpts();
-        askInput().focus();
-      },
-    }, h('span', { class: 'dot', style: `background: ${g.color}` }), g.name, ' ', h('span', { class: 'count' }, `(${g.items.length})`))),
-    hasRecent && state.ui.group ? h('button', {
-      type: 'button', class: 'group-toggle',
-      onclick: () => {
-        state.ui.showGroups = false;
-        state.ui.group = null;
-        state.ui.sel = -1;
-        renderAskOpts();
-        askInput().focus();
-      },
-    }, '一覧を閉じる ▴') : null,
-  ] : null);
-
   const opts = def.kind === 'pick' ? askCandidates(def).map((x) => ({ id: x.id, label: x.name, color: def.color(x) })) : [];
   if (state.ui.sel >= opts.length) state.ui.sel = opts.length ? 0 : -1;
   const box = $('#ask-opts');
   box.classList.toggle('gap-scale', !!def.scale);
   // マッチの質は、選んでいるあいだほかの2つを薄く出す(設計書「簡易入力の設計」)
   box.classList.toggle('has-sel', !!def.scale && state.ui.sel >= 0);
-  const showRecent = def.kind === 'pick' && !!def.groups && !typed && hasRecent && !state.ui.group;
+  const showRecent = def.kind === 'pick' && !!def.groups && !typed && hasRecent;
   fill(box, def.scale ? scaleEnds() : null,
   showRecent ? h('li', { class: 'opt-recent', role: 'presentation' }, '最近:') : null,
   opts.map((o, n) => h('li', {
     class: 'opt', role: 'option', id: `ask-opt-${n}`, 'aria-selected': String(n === state.ui.sel),
     onmousedown: (e) => { e.preventDefault(); state.ui.sel = n; state.timer.clicks += 1; askCommit(); },
   }, o.color ? h('span', { class: 'dot', style: `background: ${o.color}` }) : null, o.label)),
-  showRecent ? h('li', { role: 'presentation' }, h('button', {
-    type: 'button', class: 'group-toggle', 'aria-expanded': String(state.ui.showGroups),
-    onclick: () => {
-      state.ui.showGroups = !state.ui.showGroups;
-      if (!state.ui.showGroups) state.ui.group = null;
-      renderAskOpts();
-      askInput().focus();
-    },
-  }, state.ui.showGroups ? '一覧を閉じる ▴' : '一覧から探す ▾')) : null,
-  def.kind === 'pick' && !opts.length && (!groups || typed) ? h('li', { class: 'opt-empty' }, typed ? '一致する候補がありません' : '名前を入力してください') : null,
+  def.kind === 'pick' && !opts.length && typed ? h('li', { class: 'opt-empty' }, '一致する候補がありません') : null,
   def.scale && typed && state.ui.sel < 0 ? h('li', { class: 'opt-empty scale-none' }, '一致する候補がありません') : null);
+  const browseEl = $('#ask-browse');
+  const showBrowse = def.kind === 'pick' && !!def.groups && !typed;
+  browseEl.hidden = !showBrowse;
+  fill(browseEl, showBrowse ? h('button', {
+    type: 'button', class: 'link',
+    onclick: () => { state.timer.clicks += 1; openBrowse(); },
+  }, def.browseOpenLabel) : null);
   askInput().setAttribute('aria-activedescendant', state.ui.sel >= 0 ? `ask-opt-${state.ui.sel}` : '');
   // 「次へ」の文言: 文は 次へ/とばす、候補と段階は 決める/そのまま
   const empty = !askInput().value.trim();
@@ -1040,6 +1013,88 @@ function renderAskOpts() {
   if (def.kind === 'text') send.textContent = empty ? (has ? 'そのまま' : 'とばす') : '次へ';
   else send.textContent = state.ui.sel >= 0 && opts[state.ui.sel]?.id !== askAnswer(state.ask.step) ? '決める' : has ? 'そのまま' : def.optional ? 'とばす' : '決める';
   send.classList.toggle('skip', def.kind === 'text' ? empty : state.ui.sel < 0);
+}
+
+// ---------- マップ・ヒーロー一覧オーバーレイ(設計書 F1・F2) ----------
+
+function browseContext() {
+  const def = stepDef(state.ask.step);
+  if (!def.groups) return null;
+  const groups = def.groups();
+  if (!groups.length) return null;
+  const group = groups.find((g) => g.id === state.ui.browseGroup) ?? groups[0];
+  return { def, groups, group };
+}
+
+function openBrowse({ byInput = false } = {}) {
+  const ctx = browseContext();
+  if (!ctx) return;
+  state.ui.browseGroup = ctx.group.id;
+  state.ui.browseSel = 0;
+  state.ui.browseByInput = byInput;
+  $('#browse-overlay').hidden = false;
+  renderBrowse();
+}
+
+function closeBrowse({ restoreFocus = true } = {}) {
+  const overlay = $('#browse-overlay');
+  if (!overlay || overlay.hidden) return;
+  overlay.hidden = true;
+  if (state.ui.browseByInput) {
+    askInput().value = '';
+    state.ui.typed = null;
+    state.ui.sel = -1;
+    renderAskOpts();
+  }
+  state.ui.browseByInput = false;
+  if (restoreFocus && !$('#view-home').hidden && !$('#match-dialog').open) askInput().focus();
+}
+
+function renderBrowse() {
+  const ctx = browseContext();
+  if (!ctx) return;
+  const { def, groups, group } = ctx;
+  const items = group.items;
+  if (state.ui.browseSel >= items.length) state.ui.browseSel = items.length ? 0 : -1;
+  $('#browse-title').textContent = def.browseTitle;
+  fill($('#browse-tabs'), groups.map((g) => h('button', {
+    type: 'button', class: 'browse-tab', role: 'tab', 'aria-selected': String(g.id === group.id),
+    onclick: () => {
+      state.ui.browseGroup = g.id;
+      state.ui.browseSel = 0;
+      renderBrowse();
+    },
+  }, h('span', { class: 'dot', style: `background: ${g.color}` }), g.name, ' ', h('span', { class: 'count' }, `(${g.items.length})`))));
+  const grid = $('#browse-grid');
+  grid.classList.toggle('is-map', state.ask.step === 'map');
+  fill(grid, items.map((item, n) => h('li', {
+    class: 'browse-item', role: 'option', 'aria-selected': String(n === state.ui.browseSel),
+    onclick: () => { state.timer.clicks += 1; commitBrowseItem(item); },
+  }, h('span', { class: 'dot', style: `background: ${def.color(item)}` }), item.name)));
+  const k = (t) => h('kbd', {}, t);
+  fill($('#browse-foot'),
+    h('span', {}, k('←'), ' ', k('→'), ` ${def.browseSwitchLabel}　`, k('↑'), ' ', k('↓'), ' 選択　', k('Enter'), ' 決定'),
+    h('span', {}, k('Esc'), ' で戻る'));
+}
+
+function moveBrowseGrid(deltaY) {
+  const ctx = browseContext();
+  if (!ctx || !ctx.group.items.length) return;
+  const grid = $('#browse-grid');
+  const cols = Math.max(1, getComputedStyle(grid).gridTemplateColumns.split(' ').filter(Boolean).length);
+  const len = ctx.group.items.length;
+  const cur = Math.max(0, state.ui.browseSel);
+  const next = cur + deltaY * cols;
+  if (next >= 0 && next < len) state.ui.browseSel = next;
+  else state.ui.browseSel = (cur + deltaY + len) % len;
+  renderBrowse();
+  grid.children[state.ui.browseSel]?.scrollIntoView({ block: 'nearest' });
+}
+
+async function commitBrowseItem(item) {
+  const step = state.ask.step;
+  closeBrowse({ restoreFocus: false });
+  await setAnswer(step, item.id);
 }
 
 // 文の長さに合わせて入力欄の高さを変える
@@ -1065,6 +1120,11 @@ function bindAsk() {
     const def = stepDef(state.ask.step);
     // 打ち直したら、Tab で変換する前の文字ではなく、いまの文字で絞る
     state.ui.typed = null;
+    if (def.browseKey && input.value.trim().toLowerCase() === def.browseKey) {
+      renderAskOpts();
+      openBrowse({ byInput: true });
+      return;
+    }
     // 結果などは、候補が1つに絞れるまで選ばない(d だけでは DRAW と DEFEAT を決めない。設計書 F3)
     if (def.scale) state.ui.sel = scaleMatch(def, input.value);
     else if (def.kind === 'pick') state.ui.sel = input.value.trim() && (def.firstSelected || askCandidates(def).length === 1) ? 0 : -1;
@@ -1077,7 +1137,22 @@ function bindAsk() {
   input.addEventListener('keydown', (e) => {
     const def = stepDef(state.ask.step);
     // 日本語の変換中(確定の Enter を含む)は何もしない
-    if (e.isComposing || e.keyCode === 229 || e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.isComposing || e.keyCode === 229 || e.altKey || e.metaKey) return;
+    if (e.ctrlKey) {
+      if ((e.code === 'Space' || e.key === ' ') && def.groups) {
+        e.preventDefault();
+        e.stopPropagation();
+        openBrowse();
+      }
+      return;
+    }
+    const empty = input.value === '';
+    if (e.key === '/' && empty && def.groups) {
+      e.preventDefault();
+      e.stopPropagation();
+      openBrowse();
+      return;
+    }
     // Esc: 開いている「ほかのキー操作」を閉じる
     if (e.key === 'Escape' && state.ui.keysOpen) {
       e.preventDefault();
@@ -1085,7 +1160,6 @@ function bindAsk() {
       renderAskKeys(def, !!askAnswer(state.ask.step));
       return;
     }
-    const empty = input.value === '';
     // 入力欄が空のときだけ、← と Backspace・Delete で前の問いへ、→ で次の問いへ(答えてある問いだけ)
     if (empty && ['ArrowLeft', 'Backspace', 'Delete'].includes(e.key)) {
       e.preventDefault();
@@ -1294,6 +1368,36 @@ function bindKeyboard() {
       if (e.key === 'Escape' || (e.key === 'Enter' && !e.isComposing && !e.altKey && !e.ctrlKey && !e.metaKey)) {
         e.preventDefault();
         closeTour();
+      }
+      return;
+    }
+    if (!$('#browse-overlay').hidden) {
+      if (e.isComposing || e.keyCode === 229) return;
+      if (e.key === 'Escape' || e.key === '/' || (e.ctrlKey && (e.code === 'Space' || e.key === ' '))) {
+        e.preventDefault();
+        closeBrowse();
+        return;
+      }
+      const ctx = browseContext();
+      if (!ctx) return;
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        e.preventDefault();
+        const i = ctx.groups.indexOf(ctx.group);
+        const dir = e.key === 'ArrowRight' ? 1 : -1;
+        state.ui.browseGroup = ctx.groups[(i + dir + ctx.groups.length) % ctx.groups.length].id;
+        state.ui.browseSel = 0;
+        renderBrowse();
+        return;
+      }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        moveBrowseGrid(e.key === 'ArrowDown' ? 1 : -1);
+        return;
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const item = ctx.group.items[state.ui.browseSel];
+        if (item) { state.timer.keys += 1; commitBrowseItem(item); }
       }
       return;
     }
