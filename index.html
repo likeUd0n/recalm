@@ -63,8 +63,8 @@
       </div>
       <p class="text-count muted" id="ask-count" hidden></p>
       <p class="ask-cur muted" id="ask-cur" hidden></p>
-      <div class="group-tabs" id="ask-groups" hidden></div>
       <ul class="ask-opts" id="ask-opts" role="listbox" aria-label="候補"></ul>
+      <p class="ask-browse" id="ask-browse" hidden></p>
       <div class="ask-keys" id="ask-keys"></div>
       <p class="ask-reset"><button type="button" class="link" id="reset-form">入力をリセット</button><button type="button" class="link" id="undo-save" hidden>保存を取り消す</button></p>
     </section>
@@ -212,6 +212,22 @@
   </footer>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <!-- マップ・ヒーロー一覧オーバーレイ(設計書 F1・F2) -->
+  <div id="browse-overlay" hidden>
+    <div class="tour-backdrop" id="browse-backdrop"></div>
+    <div class="browse-layer">
+      <div class="browse-card" role="dialog" aria-modal="true" aria-labelledby="browse-title">
+        <div class="browse-head">
+          <h2 class="browse-title" id="browse-title"></h2>
+          <button type="button" class="browse-close" id="browse-close" aria-label="閉じる">閉じる <kbd>Esc</kbd></button>
+        </div>
+        <div class="browse-tabs" id="browse-tabs" role="tablist"></div>
+        <ul class="browse-grid" id="browse-grid" role="listbox"></ul>
+        <div class="browse-foot" id="browse-foot"></div>
+      </div>
+    </div>
+  </div>
 
   <!-- 初回起動時の使い方ツアー(設計書「簡易入力の設計」 案B: 薄く透過したオーバーレイ + Enter/Esc で即閉じる) -->
   <div id="tour-overlay" hidden>
