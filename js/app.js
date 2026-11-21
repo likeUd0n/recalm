@@ -5,13 +5,13 @@ import {
   DELETED_LABELS, SKILL_GAPS, SKILL_GAP_ALIASES, TIME_SLOTS,
   BACKUP_STORES, BACKUP_META_KEY, BACKUP_STALE_DAYS, REFERENCE_MIN_GAMES, DRAFT_KEY, TOUR_KEY, FINISH_PAUSE_MS,
   AUTOSAVE_META_KEY, AUTOSAVE_FILE, AUTOSAVE_DELAY_MS, AUTODOWNLOAD_META_KEY, DEVICE_META_KEYS, DISPLAY_META_KEY, DISPLAY_DEFAULTS,
-  IMPROVEMENT_TARGET_RATE, TRIAL_LOSS_GAMES, SESSION_GAP_MINUTES, SESSION_ELAPSED_STEP_MINUTES,
+  SESSION_GAP_MINUTES, SESSION_ELAPSED_STEP_MINUTES,
 } from './config.js';
 import {
   dayKeyOf, jstParts, timeSlotOf, timeSlotRangeText, matchTimeTags, matchesNeedingUpdate, recentMapIds,
   heroUsage, orderByRecent, searchByName, LOSS_REVIEW_FIELDS, WIN_REVIEW_FIELDS, DRAW_REVIEW_FIELDS, LEGACY_REVIEW_FIELDS, ASK_BEFORE_SAVE, askSteps,
   dailyTally, runningTallies, tallyText, winLossText, tallyLabel, shiftDayKey, roleRecords, reviewEntries, latestNextMove,
-  buildBackup, parseBackup, backupStatus, timeTagStats, statsScope, sessionElapsedStats, trialProgress, reviewRates, isAskEmpty, buildDraft, restoreDraft,
+  buildBackup, parseBackup, backupStatus, statsScope, sessionElapsedStats, winRateHold, splitHeroInput, triedStats, triedSinceLastMatch, isAskEmpty, buildDraft, restoreDraft,
 } from './logic.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -41,7 +41,7 @@ function hintParas(text) {
 // 問いかけ入力の状態(設計書「簡易入力の設計」)。answers は保存する前の答え、step はいまの問い、
 // matchId は保存した試合(保存前は null)、seen は保存する前に一度開いた問い(とばした任意の問いへ戻らないため)。
 const emptyAsk = () => ({
-  answers: { memo: '', result: null, skillGap: null, mapId: null, heroId: null },
+  answers: { memo: '', result: null, skillGap: null, mapId: null, heroId: null, otherHeroIds: [] },
   step: 'memo', matchId: null, seen: new Set(), reviewed: false,
 });
 
@@ -178,6 +178,8 @@ function showView() {
   } else if (view === 'matches') {
     renderMatchesView();
   } else if (view === 'stats') {
+    // 集計を開いたときは、カードの中身を閉じた状態にする(前回開いていたものは覚えない。設計書 F5)
+    statsOpen = null;
     renderStats();
   } else {
     renderAsk();
@@ -205,9 +207,10 @@ function bindEvents() {
   $('#autosave-reconnect').addEventListener('click', reconnectAutoSave);
   $('#autosave-stop').addEventListener('click', stopAutoSave);
   $('#autodl-enabled').addEventListener('change', (e) => setAutoDownload(e.target.checked));
-  for (const [name, key] of [['pref-today', 'today'], ['pref-stats', 'stats']]) {
-    for (const r of document.querySelectorAll(`input[name="${name}"]`)) r.addEventListener('change', () => setDisplay(key, r.value));
-  }
+  for (const r of document.querySelectorAll('input[name="pref-today"]')) r.addEventListener('change', () => setDisplay('today', r.value));
+  $('#prev-imp-try').addEventListener('click', toggleTried);
+  $('#card-tried').addEventListener('click', () => toggleStatsDetail('tried'));
+  $('#card-hold').addEventListener('click', () => toggleStatsDetail('session'));
 
   window.addEventListener('hashchange', showView);
 
@@ -297,7 +300,35 @@ const fieldOf = (id, result) => {
   const byResult = { loss: LOSS_REVIEW_FIELDS, win: WIN_REVIEW_FIELDS, draw: DRAW_REVIEW_FIELDS }[result];
   return byResult?.find((f) => f.key === id) ?? REVIEW_FIELDS.find((f) => f.key === id);
 };
-const askHeroIds = () => (state.ask.answers.heroId ? [state.ask.answers.heroId] : []);
+// 選んだヒーローを打った順に。heroId が1人目、otherHeroIds が2人目から(設計書 F2)
+const askHeroIds = () => (state.ask.answers.heroId ? [state.ask.answers.heroId, ...(state.ask.answers.otherHeroIds ?? [])] : []);
+// ヒーローの問いの入力を、決まったヒーローと打ちかけの語に分ける(ヒーローの問い以外では null)。
+// 2人目からは1人目と同じロールだけを選べる(2026-11-21 ユーザー指定)。違うロールのヒーローは blocked に分ける
+function heroInput(text) {
+  if (state.ask.step !== 'hero') return null;
+  const p = splitHeroInput(state.master.heroes, text, heroUsage(state.matches, state.slots).recent);
+  const role = state.heroById.get(p.ids[0])?.role ?? null;
+  const ids = p.ids.filter((id) => state.heroById.get(id)?.role === role);
+  return { ...p, ids, role, blocked: p.ids.filter((id) => !ids.includes(id)) };
+}
+const heroLock = () => heroInput(state.ui.typed ?? askInput().value)?.role ?? null;
+// 違うロールのヒーローを打ったときの説明。打ちかけの語が、同じロールのどの候補よりも先に違うロールのヒーローに一致するときも出す
+// (「tra」で Tracer より後の Ramattra だけが残り、Tracer が消えた理由が分からなくならないように)
+function heroRoleBlock() {
+  const hi = heroInput(state.ui.typed ?? askInput().value);
+  if (!hi?.role) return null;
+  let names = hi.blocked;
+  if (!names.length && hi.query) {
+    const hits = searchTyped(state.master.heroes, hi.query, []);
+    const firstOk = hits.findIndex((x) => x.role === hi.role);
+    names = hits.slice(0, firstOk < 0 ? hits.length : firstOk).map((x) => x.id).slice(0, 3);
+  }
+  if (!names.length) return null;
+  const label = ROLES.find((r) => r.id === hi.role)?.label ?? '';
+  return `${names.map(heroName).join('・')} は ${label} ではないため選べません。1人目が ${heroName(hi.ids[0])} なので、${label} のヒーローだけ選べます`;
+}
+// 候補 id を、入力欄で先に決めたヒーローの後ろに足す
+const withHeadHeroes = (id) => [...new Set([...(heroInput(state.ui.typed ?? askInput().value)?.ids ?? []), id])];
 
 // タッチ端末(カーソルを合わせられない)では、キーの説明の代わりに「押して選ぶ」と伝える(設計書「簡易入力の設計」)
 const isTouch = () => matchMedia('(hover: none)').matches;
@@ -344,7 +375,7 @@ function stepDef(id) {
   }
   if (id === 'hero') {
     return {
-      kind: 'pick', short: 'ヒーロー', q: '使ったヒーローは?', sub: `ロールはヒーローから決まります。答えると試合を保存します。${pickHow()}`,
+      kind: 'pick', short: 'ヒーロー', q: '使ったヒーローは?', sub: `ロールはヒーローから決まります。答えると試合を保存します。${pickHow()}\n2人以上は空白で区切って打てます(tracer genji)`,
       example: 'tracer', items: state.master.heroes,
       browseKey: 'hero', browseTitle: 'ヒーローを選ぶ', browseOpenLabel: 'ヒーロー一覧を開く', browseSwitchLabel: 'ロール切替',
       // 空欄のときは「最近」を出し、その下の固定位置のリンク・hero入力・/ / Ctrl+Space で一覧オーバーレイを開く(設計書 F2)
@@ -354,7 +385,8 @@ function stepDef(id) {
         name: r.label,
         color: `var(--role-${r.id})`,
         items: state.master.heroes.filter((x) => x.role === r.id).sort((a, b) => a.name.localeCompare(b.name, 'en')),
-      })).filter((g) => g.items.length),
+      // 入力欄で1人目を決めていたら、一覧もそのロールだけにする
+      })).filter((g) => g.items.length && (!heroLock() || g.id === heroLock())),
       color: (x) => `var(--role-${x.role})`, firstSelected: true,
     };
   }
@@ -378,7 +410,7 @@ function answerLabel(id, v) {
   if (id === 'result') return RESULT_LABELS[v];
   if (id === 'skillGap') return skillGapLabel(v);
   if (id === 'map') return state.mapById.get(v)?.name ?? DELETED_LABELS.map;
-  if (id === 'hero') return heroName(v);
+  if (id === 'hero') return askHeroIds().map(heroName).join(', ');
   return v;
 }
 function answerColor(id, v) {
@@ -395,12 +427,45 @@ const askInput = () => $('#ask-input');
 // 候補(pick の問い)。空のときは「最近」、打ったら名前か読みの一致するもの
 // Tab で候補の名前に変換した後も、変換前に打った文字(state.ui.typed)で絞ったままにする
 function askCandidates(def) {
-  const q = state.ui.typed ?? askInput().value;
+  const typed = state.ui.typed ?? askInput().value;
   if (def.scale) return def.items;
+  // ヒーローは空白で区切った最後の語で絞り、先に決めたヒーローは候補から外す(設計書 F2)
+  const hi = heroInput(typed);
+  const q = hi ? hi.query : typed;
+  if (hi?.ids.length) {
+    // 2人目からは1人目と同じロールのヒーローだけを出す
+    const rest = (xs) => xs.filter((x) => x.id === BROWSE_CMD || (!hi.ids.includes(x.id) && x.role === hi.role));
+    return q ? rest(askCandidatesFor(def, q)) : rest(def.recent());
+  }
   if (!q.trim()) return def.recent();
+  return askCandidatesFor(def, q);
+}
+
+function askCandidatesFor(def, q) {
   const recent = def.items === state.master.heroes ? heroUsage(state.matches, state.slots).recent
     : def.items === state.master.maps ? recentMapIds(state.matches) : [];
-  return searchByName(def.items, q, recent).slice(0, 8);
+  const list = searchTyped(def.items, q, recent).slice(0, 8);
+  // map・hero(まっぷ・ひーろー も)を打つ途中なら、一覧を開く候補を最後に足す(設計書 F1・F2)
+  const cmd = toHiragana(q.trim().toLowerCase());
+  return def.browseKey && cmd && browseKeys(def).some((k) => k.startsWith(cmd))
+    ? [...list, { id: BROWSE_CMD, name: def.browseKey, label: def.browseOpenLabel }]
+    : list;
+}
+
+// 一覧を開く入力: 英字の map・hero と、かなの まっぷ・ひーろー(カタカナはひらがなにそろえて比べる)
+const BROWSE_KANA = { map: 'まっぷ', hero: 'ひーろー' };
+const browseKeys = (def) => [def.browseKey, BROWSE_KANA[def.browseKey]].filter(Boolean);
+const toHiragana = (s) => s.replace(/[ァ-ヶ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60));
+
+// 一覧を開く候補の id
+const BROWSE_CMD = ':browse';
+
+// 日本語入力で漢字に変換した後(「なんきょくはんとう」→「南極半島」)も、変換前のかなで探す(設計書 F1)
+const hasKanji = (s) => /[㐀-鿿々]/.test(s);
+function searchTyped(items, q, recent) {
+  const hits = searchByName(items, q, recent);
+  const kana = state.ui.kana?.step === state.ask.step ? state.ui.kana.text : '';
+  return !hits.length && kana && hasKanji(q) ? searchByName(items, kana, recent) : hits;
 }
 
 function resetAsk() {
@@ -547,8 +612,13 @@ async function setAnswer(id, value) {
         return;
       }
     }
+  } else if (id === 'hero') {
+    // ヒーローは打った順の配列でも受ける。1人目を heroId、2人目からを otherHeroIds に置く
+    const ids = [].concat(value ?? []);
+    state.ask.answers.heroId = ids[0] ?? null;
+    state.ask.answers.otherHeroIds = ids.slice(1);
   } else {
-    const key = { map: 'mapId', hero: 'heroId' }[id] ?? id;
+    const key = { map: 'mapId' }[id] ?? id;
     state.ask.answers[key] = value;
   }
   await askNext();
@@ -575,8 +645,16 @@ async function askCommit({ byKey = false } = {}) {
   }
   // 空欄の Enter は候補を決めない。打った文字があり候補が複数なら先頭を決める(結果だけは1つに絞れるまで決めない。設計書 F3)
   const list = askCandidates(def);
-  const c = list[state.ui.sel] ?? (text && (def.firstSelected || list.length === 1) ? list[0] : null);
-  if (c) await setAnswer(id, c.id);
+  // ヒーローは打ちかけの語があるときだけ先頭を決める(「tracer 」の Enter で最近の候補を足さない)
+  const hi = heroInput(state.ui.typed ?? askInput().value);
+  // 1人目と違うロールのヒーローを打っているあいだは決めない(候補の下に理由を出している)
+  if (hi?.blocked.length) return;
+  const typing = hi ? !!hi.query : !!text;
+  const c = list[state.ui.sel] ?? (typing && (def.firstSelected || list.length === 1) ? list[0] : null);
+  if (c?.id === BROWSE_CMD) openBrowse({ byInput: true });
+  else if (c) await setAnswer(id, hi ? withHeadHeroes(c.id) : c.id);
+  // 「tracer 」のように区切りで終えたら、決まったヒーローだけで決める
+  else if (hi?.ids.length && !hi.query) await setAnswer(id, hi.ids);
   else if (!text && has) await askNext();
   else if (!text && def.optional) await setAnswer(id, null);
 }
@@ -647,7 +725,8 @@ async function saveAskMatch() {
 
 async function saveAskMatchNow() {
   const a = state.ask.answers;
-  const hero = state.heroById.get(a.heroId);
+  const heroIds = askHeroIds().filter((x) => state.heroById.has(x));
+  const hero = state.heroById.get(heroIds[0]);
   if (!a.result || !a.skillGap || !a.mapId || !hero) return;
   const now = new Date();
   const startedAt = state.timer.startedAt ?? now.getTime();
@@ -656,7 +735,7 @@ async function saveAskMatchNow() {
     createdAt: now.toISOString(),
     date: dayKeyOf(now),
     timeSlot: timeSlotOf(now).id,
-    role: hero.role, // ロールは選んだヒーローのロール(設計書 F3)
+    role: hero.role, // ロールは1人目のヒーローのロール(設計書 F3。同じ試合でロールは混ざらない)
     mapId: a.mapId,
     result: a.result,
     skillGap: a.skillGap,
@@ -668,7 +747,7 @@ async function saveAskMatchNow() {
   try {
     await db.saveMatch({
       match,
-      ...childRows(match.id, { heroIds: [hero.id], banned: false, bans: new Map(), allyComp: null, enemyComp: null }),
+      ...childRows(match.id, { heroIds, banned: false, bans: new Map(), allyComp: null, enemyComp: null }),
       review: memo ? { matchId: match.id, memo, updatedAt: now.toISOString() } : null,
     });
   } catch (e) {
@@ -832,7 +911,7 @@ function renderPrevImprovement() {
   if (!entry) return;
   const m = entry.match;
   const map = m.mapId ? state.mapById.get(m.mapId) : null;
-  const heroId = selfHeroIds(m.id)[0] ?? null;
+  const prevHeroIds = selfHeroIds(m.id);
   // いつの試合か: 1分未満は「たった今」、60分未満は「N分前」、今日なら「今日 21:40」、それより前は「10月24日」
   const minutes = Math.floor((Date.now() - new Date(m.createdAt).getTime()) / 60000);
   const day = dayKeyOf(new Date(m.createdAt));
@@ -850,12 +929,32 @@ function renderPrevImprovement() {
   // メタ情報はピル枠や強い色を付けず、落ち着いた1行のテキストで並べる
   $('#prev-imp-meta').textContent = [
     `${ago}${fromKind ?? '試合'}より`,
-    heroId ? heroName(heroId) : null,
+    prevHeroIds.length ? reviewHero(prevHeroIds) : null,
     m.mapId ? (map?.name ?? DELETED_LABELS.map) : null,
     RESULT_LABELS[m.result],
     when,
   ].filter(Boolean).join(' · ');
   $('#prev-imp-more').onclick = () => { state.ui.historyMode = 'review'; };
+  // 試した: 最後に保存した試合より後に押していれば「✓」にする。回数は0回なら出さない
+  const tried = state.reviews.get(m.id)?.tried ?? [];
+  const done = !!triedSinceLastMatch(tried, state.matches);
+  const btn = $('#prev-imp-try');
+  btn.textContent = done ? '✓ この試合で試した' : 'この試合で試した';
+  btn.setAttribute('aria-pressed', String(done));
+  const count = $('#prev-imp-count');
+  count.hidden = !tried.length;
+  count.textContent = `これまで ${tried.length}回`;
+}
+
+// 「この試合で試した」を押す。押した日時を、その次に試すことを書いた試合の振り返りに足す。
+// 最後に保存した試合より後に押していれば、それを取り消す(1試合に1回。設計書「簡易入力の設計」)
+async function toggleTried() {
+  const entry = latestNextMove(state.matches, state.reviews);
+  if (!entry) return;
+  const tried = state.reviews.get(entry.match.id)?.tried ?? [];
+  const done = triedSinceLastMatch(tried, state.matches);
+  await saveReview(entry.match.id, { tried: done ? tried.filter((t) => t !== done) : [...tried, new Date().toISOString()] });
+  renderPrevImprovement();
 }
 
 // 問いの進み: 「記録」(保存前の5問)と「振り返り」の段に分け、いまの段の点だけを出す。
@@ -968,7 +1067,7 @@ function renderAskKeys(def, has) {
 
 // 段階の問い(scale)で、打った文字に合う段の位置。合わなければ -1
 function scaleMatch(def, text) {
-  const hit = text.trim() ? searchByName(def.items, text, [])[0] : null;
+  const hit = text.trim() ? searchTyped(def.items, text, [])[0] : null;
   return hit ? def.items.indexOf(hit) : -1;
 }
 
@@ -983,20 +1082,27 @@ function renderAskOpts() {
   const def = stepDef(state.ask.step);
   const typed = (state.ui.typed ?? askInput().value).trim();
   const hasRecent = def.kind === 'pick' && def.recent().length > 0;
-  const opts = def.kind === 'pick' ? askCandidates(def).map((x) => ({ id: x.id, label: x.name, color: def.color(x) })) : [];
+  const opts = def.kind === 'pick'
+    ? askCandidates(def).map((x) => (x.id === BROWSE_CMD ? { id: x.id, label: [h('kbd', {}, x.name), ` ${x.label}`], cmd: true } : { id: x.id, label: x.name, color: def.color(x) }))
+    : [];
   if (state.ui.sel >= opts.length) state.ui.sel = opts.length ? 0 : -1;
   const box = $('#ask-opts');
   box.classList.toggle('gap-scale', !!def.scale);
   // マッチの質は、選んでいるあいだほかの2つを薄く出す(設計書「簡易入力の設計」)
   box.classList.toggle('has-sel', !!def.scale && state.ui.sel >= 0);
   const showRecent = def.kind === 'pick' && !!def.groups && !typed && hasRecent;
+  // 空白で区切って先に決めたヒーローを、候補の前に「Tracer,」と出す(設計書 F2)
+  const headIds = heroInput(state.ui.typed ?? askInput().value)?.ids ?? [];
+  const roleBlock = def.kind === 'pick' ? heroRoleBlock() : null;
   fill(box, def.scale ? scaleEnds() : null,
   showRecent ? h('li', { class: 'opt-recent', role: 'presentation' }, '最近:') : null,
+  headIds.length ? h('li', { class: 'opt-recent', role: 'presentation' }, `${headIds.map(heroName).join(', ')},`) : null,
   opts.map((o, n) => h('li', {
-    class: 'opt', role: 'option', id: `ask-opt-${n}`, 'aria-selected': String(n === state.ui.sel),
+    class: o.cmd ? 'opt opt-cmd' : 'opt', role: 'option', id: `ask-opt-${n}`, 'aria-selected': String(n === state.ui.sel),
     onmousedown: (e) => { e.preventDefault(); state.ui.sel = n; state.timer.clicks += 1; askCommit(); },
-  }, o.color ? h('span', { class: 'dot', style: `background: ${o.color}` }) : null, o.label)),
-  def.kind === 'pick' && !opts.length && typed ? h('li', { class: 'opt-empty' }, '一致する候補がありません') : null,
+  }, o.color ? h('span', { class: 'dot', style: `background: ${o.color}` }) : null, ...[].concat(o.label))),
+  roleBlock ? h('li', { class: 'opt-empty opt-block', role: 'alert' }, roleBlock) : null,
+  def.kind === 'pick' && !opts.length && typed && !roleBlock ? h('li', { class: 'opt-empty' }, '一致する候補がありません') : null,
   def.scale && typed && state.ui.sel < 0 ? h('li', { class: 'opt-empty scale-none' }, '一致する候補がありません') : null);
   const browseEl = $('#ask-browse');
   const showBrowse = def.kind === 'pick' && !!def.groups && !typed;
@@ -1004,7 +1110,9 @@ function renderAskOpts() {
   fill(browseEl, showBrowse ? h('button', {
     type: 'button', class: 'link',
     onclick: () => { state.timer.clicks += 1; openBrowse(); },
-  }, def.browseOpenLabel) : null);
+  }, def.browseOpenLabel) : null,
+  // 一覧を開くキーと map・hero の入力があることを伝える(タッチ端末では出さない)
+  showBrowse && !isTouch() ? h('span', { class: 'muted browse-how' }, ' ', h('kbd', {}, '/'), ' か ', h('kbd', {}, def.browseKey), ' と打っても開けます') : null);
   askInput().setAttribute('aria-activedescendant', state.ui.sel >= 0 ? `ask-opt-${state.ui.sel}` : '');
   // 「次へ」の文言: 文は 次へ/とばす、候補と段階は 決める/そのまま
   const empty = !askInput().value.trim();
@@ -1032,6 +1140,8 @@ function openBrowse({ byInput = false } = {}) {
   state.ui.browseGroup = ctx.group.id;
   state.ui.browseSel = 0;
   state.ui.browseByInput = byInput;
+  // 開いている間は、後ろの入力欄に文字(日本語入力を含む)が入らないようにする。キー操作は keydown で受ける
+  askInput().readOnly = true;
   $('#browse-overlay').hidden = false;
   renderBrowse();
 }
@@ -1040,6 +1150,7 @@ function closeBrowse({ restoreFocus = true } = {}) {
   const overlay = $('#browse-overlay');
   if (!overlay || overlay.hidden) return;
   overlay.hidden = true;
+  askInput().readOnly = false;
   if (state.ui.browseByInput) {
     askInput().value = '';
     state.ui.typed = null;
@@ -1073,7 +1184,10 @@ function renderBrowse() {
   }, h('span', { class: 'dot', style: `background: ${def.color(item)}` }), item.name)));
   const k = (t) => h('kbd', {}, t);
   fill($('#browse-foot'),
-    h('span', {}, k('←'), ' ', k('→'), ` ${def.browseSwitchLabel}　`, k('↑'), ' ', k('↓'), ' 選択　', k('Enter'), ' 決定'),
+    h('span', { class: 'browse-keys' },
+      h('span', {}, k('Tab'), ' ', k('Shift'), '+', k('Tab'), ` ${def.browseSwitchLabel}`),
+      h('span', {}, k('←'), k('↑'), k('↓'), k('→'), ' / ', k('h'), k('j'), k('k'), k('l'), ' 選択'),
+      h('span', {}, k('Enter'), ' 決定')),
     h('span', {}, k('Esc'), ' で戻る'));
 }
 
@@ -1091,10 +1205,21 @@ function moveBrowseGrid(deltaY) {
   grid.children[state.ui.browseSel]?.scrollIntoView({ block: 'nearest' });
 }
 
+// 左右: 隣の項目へ。端では反対の端へ回る
+function moveBrowseX(deltaX) {
+  const ctx = browseContext();
+  if (!ctx || !ctx.group.items.length) return;
+  const len = ctx.group.items.length;
+  state.ui.browseSel = (Math.max(0, state.ui.browseSel) + deltaX + len) % len;
+  renderBrowse();
+  $('#browse-grid').children[state.ui.browseSel]?.scrollIntoView({ block: 'nearest' });
+}
+
 async function commitBrowseItem(item) {
   const step = state.ask.step;
+  const ids = step === 'hero' ? withHeadHeroes(item.id) : null;
   closeBrowse({ restoreFocus: false });
-  await setAnswer(step, item.id);
+  await setAnswer(step, ids ?? item.id);
 }
 
 // 文の長さに合わせて入力欄の高さを変える
@@ -1116,18 +1241,24 @@ function bindAsk() {
     if (!e.target.closest('button, a, textarea, .opt')) { e.preventDefault(); input.focus(); }
   });
 
-  input.addEventListener('input', () => {
+  input.addEventListener('input', (e) => {
     const def = stepDef(state.ask.step);
     // 打ち直したら、Tab で変換する前の文字ではなく、いまの文字で絞る
     state.ui.typed = null;
-    if (def.browseKey && input.value.trim().toLowerCase() === def.browseKey) {
+    // 漢字に変換する前に打ったかなを覚えておく(searchTyped)
+    if (!hasKanji(input.value)) state.ui.kana = /[ぁ-ゖァ-ヺ]/.test(input.value) ? { step: state.ask.step, text: input.value } : null;
+    // 「tracer hero」のように、ヒーローを打った後の hero でも開く
+    // 日本語の変換中(まっぷ と打った途中)には開かない。確定の Enter が一覧の決定に回らないように
+    const word = toHiragana((heroInput(input.value)?.query ?? input.value).trim().toLowerCase());
+    if (def.browseKey && !e.isComposing && browseKeys(def).includes(word)) {
       renderAskOpts();
       openBrowse({ byInput: true });
       return;
     }
     // 結果などは、候補が1つに絞れるまで選ばない(d だけでは DRAW と DEFEAT を決めない。設計書 F3)
     if (def.scale) state.ui.sel = scaleMatch(def, input.value);
-    else if (def.kind === 'pick') state.ui.sel = input.value.trim() && (def.firstSelected || askCandidates(def).length === 1) ? 0 : -1;
+    // ヒーローを空白で区切り終えたところ(「tracer 」)では、最近の候補を選ばない(Enter で決まったヒーローだけを決める)
+    else if (def.kind === 'pick') state.ui.sel = (heroInput(input.value)?.query ?? input.value).trim() && (def.firstSelected || askCandidates(def).length === 1) ? 0 : -1;
     renderAskOpts();
     renderTextCount($('#ask-count'), def.kind === 'text' ? input.value.length : 0);
     growAsk();
@@ -1138,6 +1269,8 @@ function bindAsk() {
     const def = stepDef(state.ask.step);
     // 日本語の変換中(確定の Enter を含む)は何もしない
     if (e.isComposing || e.keyCode === 229 || e.altKey || e.metaKey) return;
+    // 一覧オーバーレイを開いている間のキーは、オーバーレイ側(bindKeyboard)だけで扱う
+    if (!$('#browse-overlay').hidden) return;
     if (e.ctrlKey) {
       if ((e.code === 'Space' || e.key === ' ') && def.groups) {
         e.preventDefault();
@@ -1183,10 +1316,23 @@ function bindAsk() {
       e.preventDefault();
       const list = askCandidates(def);
       if (!list.length) return;
-      const cur = state.ui.typed !== null ? list.findIndex((x) => x.name === input.value) : -1;
+      // ヒーローは、先に決めた語を残して最後の語だけを変換する(「tracer gen」→「tracer Genji」)
+      const head = heroInput(state.ui.typed ?? input.value)?.head;
+      const asText = (x) => (head ? `${head} ${x.name}` : x.name);
+      const cur = state.ui.typed !== null ? list.findIndex((x) => asText(x) === input.value) : -1;
       state.ui.typed ??= input.value;
       state.ui.sel = cur >= 0 ? (cur + 1) % list.length : Math.max(state.ui.sel, 0);
-      input.value = list[state.ui.sel].name;
+      // 一覧を開く候補に変換したら、map・hero と打ったときと同じく一覧を開く
+      if (list[state.ui.sel].id === BROWSE_CMD) {
+        input.value = asText(list[state.ui.sel]);
+        state.ui.typed = null;
+        renderAskOpts();
+        openBrowse({ byInput: true });
+        // 開いた一覧で、同じ Tab をタブの切り替えとして扱わせない
+        e.stopPropagation();
+        return;
+      }
+      input.value = asText(list[state.ui.sel]);
       renderAskOpts();
       queueDraft();
       return;
@@ -1201,6 +1347,8 @@ function bindAsk() {
     if (e.key === 'Enter' && !(def.kind === 'text' && e.shiftKey)) {
       e.preventDefault();
       askCommit({ byKey: true });
+      // 一覧を開く候補を決めたときは、開いた一覧で同じ Enter を項目の決定として扱わせない
+      if (!$('#browse-overlay').hidden) e.stopPropagation();
     }
   });
 
@@ -1218,7 +1366,7 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 function svg(tag, attrs, ...children) {
   const el = document.createElementNS(SVG_NS, tag);
   for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
-  el.append(...children);
+  el.append(...children.filter((c) => c != null));
   return el;
 }
 
@@ -1271,15 +1419,12 @@ function gameIcon(id, size = 16) {
   }, ...shape());
 }
 
-// 時計・天秤・曜日のアイコン(自作の簡単な図形。設計書 F3)。stroke で描く線と、fill で塗る面を混ぜる。
+// 天秤のアイコン(自作の簡単な図形。設計書 F3)
 const line = { fill: 'none', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' };
 const SLOT_SHAPES = {
-  clock: () => [svg('circle', { cx: 12, cy: 12, r: 9, ...line }), svg('path', { d: 'M12 7v5l3 2', ...line })],
   // ピークタイム/オフピーク: マッチの質を表す天秤。水平=安定(ピークタイム)、傾き=不均等(オフピーク)
   peak: () => [svg('path', { d: 'M5 7h14M12 4v15M8 19h8M5 7l-2.5 6h5zM19 7l-2.5 6h5z', ...line })],
   offpeak: () => [svg('path', { d: 'M5 10 19 4M12 7v12M8 19h8M5 10l-2.5 6h5zM19 4l-2.5 6h5z', ...line })],
-  weekday: () => [svg('rect', { x: 3.5, y: 5, width: 17, height: 15.5, rx: 2.5, ...line }), svg('path', { d: 'M3.5 10h17M8 3v4M16 3v4', ...line })],
-  weekend: () => [svg('rect', { x: 3.5, y: 5, width: 17, height: 15.5, rx: 2.5, ...line }), svg('path', { d: 'M3.5 10h17M8 3v4M16 3v4', ...line }), svg('rect', { x: 12.5, y: 13, width: 4.5, height: 4, rx: 1, 'stroke-width': 0 })],
 };
 
 
@@ -1380,18 +1525,23 @@ function bindKeyboard() {
       }
       const ctx = browseContext();
       if (!ctx) return;
-      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      // Tab / Shift+Tab でタブ(モード・ロール)を切り替える
+      if (e.key === 'Tab' && !e.ctrlKey && !e.altKey && !e.metaKey) {
         e.preventDefault();
         const i = ctx.groups.indexOf(ctx.group);
-        const dir = e.key === 'ArrowRight' ? 1 : -1;
+        const dir = e.shiftKey ? -1 : 1;
         state.ui.browseGroup = ctx.groups[(i + dir + ctx.groups.length) % ctx.groups.length].id;
         state.ui.browseSel = 0;
         renderBrowse();
         return;
       }
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      // 矢印キーと h・j・k・l でグリッドの中を動く(一覧を開いている間は文字を打たないため、文字と競合しない)
+      const move = e.ctrlKey || e.altKey || e.metaKey ? null
+        : { ArrowLeft: [-1, 0], h: [-1, 0], ArrowRight: [1, 0], l: [1, 0], ArrowUp: [0, -1], k: [0, -1], ArrowDown: [0, 1], j: [0, 1] }[e.key];
+      if (move) {
         e.preventDefault();
-        moveBrowseGrid(e.key === 'ArrowDown' ? 1 : -1);
+        if (move[0]) moveBrowseX(move[0]);
+        else moveBrowseGrid(move[1]);
         return;
       }
       if (e.key === 'Enter') {
@@ -1425,7 +1575,8 @@ function selfHeroIds(matchId) {
 
 const heroName = (id) => state.heroById.get(id)?.name ?? DELETED_LABELS.hero;
 // 振り返りの問いに入れるヒーロー名(設計書 F6)。プレイしたヒーローがなければ「そのヒーロー」。
-const reviewHero = (heroIds) => (heroIds.length ? heroName(heroIds[0]) : 'そのヒーロー');
+// 2人以上なら1人目だけを出し、省いたと分かるよう「など」を付ける(2026-11-21 ユーザー指定)
+const reviewHero = (heroIds) => (heroIds.length ? `${heroName(heroIds[0])}${heroIds.length > 1 ? ' など' : ''}` : 'そのヒーロー');
 // 振り返り欄の見出し。補足の問いがあれば2行目に出す。
 const reviewLabel = (f, heroIds, attrs) => h('label', attrs, f.label(reviewHero(heroIds)), f.sub ? [h('br'), f.sub] : null);
 const roleName = (id) => ROLES.find((r) => r.id === id)?.label ?? '';
@@ -1468,7 +1619,7 @@ function renderMatchList(el, list) {
             : null,
           h('div', { class: 'mc-tags' },
             tag(m.mapId ? state.mapById.get(m.mapId)?.name ?? DELETED_LABELS.map : 'マップ未入力', m.mapId ? '' : 'empty'),
-            heroes.length ? tag(heroes.join(' → ')) : tag('ヒーロー未入力', 'empty')),
+            heroes.length ? tag(heroes.join(', ')) : tag('ヒーロー未入力', 'empty')),
           // 入力時間・クリック数は計測と保存を続けるが、画面には出さない(何の数字か分かりにくいため。2026-11-09 ユーザー指定)
           h('div', { class: 'mc-foot' },
             h('span', { class: 'actions' },
@@ -1516,8 +1667,9 @@ function renderReviewView() {
       ...roleName(t), ' ', ...score(t), h('span', { class: 'muted' }, `(${t.total}試合)`)))) : null);
 
   const entries = reviewEntries(state.matches, state.reviews);
-  const heroOf = (m) => selfHeroIds(m.id)[0] ?? null;
-  const heroIds = [...new Set(entries.map((e) => heroOf(e.match)).filter(Boolean))];
+  // 複数のヒーローを使った試合は、どのヒーローの絞り込みにも入れる(2026-11-21 ユーザー指定)
+  const heroesOf = (m) => selfHeroIds(m.id);
+  const heroIds = [...new Set(entries.flatMap((e) => heroesOf(e.match)))];
   if (state.ui.reviewHero !== 'all' && !heroIds.includes(state.ui.reviewHero)) state.ui.reviewHero = 'all';
   const chip = (key, value, label) => h('button', {
     type: 'button', 'aria-pressed': String(state.ui[key] === value),
@@ -1530,7 +1682,7 @@ function renderReviewView() {
     chip('reviewHero', 'all', 'All Heroes'), heroIds.map((id) => chip('reviewHero', id, heroName(id))));
 
   const shown = entries.filter((e) => (state.ui.reviewResult === 'all' || e.match.result === state.ui.reviewResult)
-    && (state.ui.reviewHero === 'all' || heroOf(e.match) === state.ui.reviewHero));
+    && (state.ui.reviewHero === 'all' || heroesOf(e.match).includes(state.ui.reviewHero)));
   const today = dayKeyOf(new Date());
   const labelOf = Object.fromEntries(REVIEW_FIELDS.map((f) => [f.key, f.short()]));
   let lastDay = null;
@@ -1540,14 +1692,15 @@ function renderReviewView() {
     const sep = day !== lastDay ? h('li', { class: 'review-day' }, `${mo}月${d}日${day === today ? '(今日)' : ''}`) : null;
     lastDay = day;
     const map = m.mapId ? state.mapById.get(m.mapId) : null;
-    const heroId = heroOf(m);
+    const mHeroIds = heroesOf(m);
+    const heroId = mHeroIds[0] ?? null;
     const hero = heroId ? state.heroById.get(heroId) : null;
     return [sep, h('li', { class: 'review-item' },
       h('div', { class: 'review-meta' },
         h('span', { class: `res ${m.result}` }, RESULT_LABELS[m.result]),
         h('span', { class: 'mc-time' }, formatTime(m.createdAt)),
         m.mapId ? h('span', { class: 'tag' }, map ? h('span', { class: 'dot', style: `background: var(--mc-${map.mode})` }) : null, map?.name ?? DELETED_LABELS.map) : null,
-        heroId ? h('span', { class: 'tag' }, hero ? roleIcon(hero.role, 14) : null, heroName(heroId)) : null),
+        heroId ? h('span', { class: 'tag' }, hero ? roleIcon(hero.role, 14) : null, mHeroIds.map(heroName).join(', ')) : null),
       // 負けた試合・新しい1問形式は「次に試すこと」を大きく出す(過去の記録に旧項目がある試合は併せて表示)
       m.result === 'loss'
         ? [sub, main].filter(Boolean).flatMap((b) => [h('div', { class: 'review-key' }, labelOf[b.key]), h('div', { class: 'review-main' }, b.text)])
@@ -1777,9 +1930,7 @@ function renderEditor(m, model, original) {
 // ---------- 描画: 設定画面 ----------
 
 function renderSettings() {
-  for (const [name, key] of [['pref-today', 'today'], ['pref-stats', 'stats']]) {
-    for (const r of document.querySelectorAll(`input[name="${name}"]`)) r.checked = r.value === state.display[key];
-  }
+  for (const r of document.querySelectorAll('input[name="pref-today"]')) r.checked = r.value === state.display.today;
   renderBackup();
   renderAutoSave();
 }
@@ -2032,11 +2183,6 @@ async function importBackup(input) {
 
 // ---------- 集計(F5) ----------
 
-const percent = (num, den) => (den ? `${Math.round((num / den) * 100)}%` : '—');
-const refTag = (total) => (total < REFERENCE_MIN_GAMES
-  ? h('span', { class: 'tag empty', title: `試合数が${REFERENCE_MIN_GAMES}未満のため、参考値です` }, '参考値')
-  : null);
-
 function renderStats() {
   const matches = state.matches;
   // 一番上に集計の対象(全期間の試合数と期間)を出す。今日の分だけと誤解しないように(設計書 F5)
@@ -2072,67 +2218,107 @@ function renderStats() {
     h('div', { class: 'few-bar', role: 'img', 'aria-label': `${REFERENCE_MIN_GAMES}試合中${got}試合` },
       h('span', { style: `width: ${(got / REFERENCE_MIN_GAMES) * 100}%` })),
     h('span', { class: 'few-count' }, `${got} / ${REFERENCE_MIN_GAMES}試合`));
-  // はじめは上から、次に試すことの記入率、気持ちの記入率、経過時間別の勝率、時間帯別の勝率。
-  // 設定の「集計の並び順」が「勝率を先に」なら、勝率の2つを先にする(設計書 F5)。注意書きは見出し横の「?」に入れる
-  const habit = [$('#stats-impr-panel'), $('#stats-feel-panel')];
-  const rates = [$('#stats-session-panel'), $('#stats-time-panel')];
-  fewEl.after(...(state.display.stats === 'winrate' ? [...rates, ...habit] : [...habit, ...rates]));
+  // 数字のカード2枚(次に試したこと・やめどきの目安)。押すと下に詳しい中身を1つだけ開く(設計書 F5)。注意書きは見出し横の「?」に入れる
+  const tried = triedStats(matches, state.reviews, new Date());
+  const sessionRows = sessionElapsedStats(matches);
+  const hold = winRateHold(sessionRows);
+  renderStatCards(tried, sessionRows, hold);
+  fill($('#stats-tried-hint'), hintParas('記録画面の「この試合で試した」を押した回数です。\n線は週ごと(月曜から)の累計で、試さなかった週は平らになります。割合や目標は出しません。'));
+  fill($('#stats-tried'),
+    tried.total
+      ? [triedChart(tried.weeks),
+        h('h3', { class: 'stat-sub' }, '最近試したこと'),
+        h('ul', { class: 'tried-recent' }, tried.recent.map((t) => h('li', {}, h('span', {}, t.text), h('span', { class: 'muted' }, shortDay(t.at)))))]
+      : h('p', { class: 'muted' }, '記録画面の「次に試すこと」の下にある「この試合で試した」を押すと、ここに積み上がります。'));
   fill($('#stats-session-hint'), hintParas(
-    `点の高さが勝率です。50%を下回った点と線は青灰で示します。点を押すと、勝-敗と試合数が出ます。白抜きの点は試合数が${REFERENCE_MIN_GAMES}未満の参考値です。\n横軸は${SESSION_ELAPSED_STEP_MINUTES}分ごとで、${REFERENCE_MIN_GAMES}試合以上たまった区切りまで並べ、残りは最後の「〜」にまとめます。遊ぶ時間が長くなると、横軸も自動で伸びます。\n時間は、セッションの最初の記録からの経過時間です。最初の試合の長さは入らないため、実際に遊んだ時間より15〜20分ほど短く出ます。\n前の記録から${SESSION_GAP_MINUTES}分以上あいたら、新しいセッションとして0分から数えます。疲れのほかに、時間帯や相手の違いも混ざるため、集中力そのものとは言い切れません。`));
+    `点の高さが勝率です。50%を下回った点と線は青灰で示します。点を押すと、勝-敗と試合数が出ます。白抜きの点は試合数が${REFERENCE_MIN_GAMES}未満の参考値です。\n横軸は${SESSION_ELAPSED_STEP_MINUTES}分ごとで、${REFERENCE_MIN_GAMES}試合以上たまった区切りまで並べ、残りは最後の「〜」にまとめます。遊ぶ時間が長くなると、横軸も自動で伸びます。\n「やめどきの目安」は、0分から続けて勝率50%以上だった区切りの終わりです。${REFERENCE_MIN_GAMES}試合未満の区切りでは判定せず、最初の区切りで下回ったときは出しません。\n時間は、セッションの最初の記録からの経過時間です。最初の試合の長さは入らないため、実際に遊んだ時間より15〜20分ほど短く出ます。\n前の記録から${SESSION_GAP_MINUTES}分以上あいたら、新しいセッションとして0分から数えます。疲れのほかに、時間帯や相手の違いも混ざるため、集中力そのものとは言い切れません。`));
+  // やめどきの目安: 0分から続けて勝率50%以上だった区分の終わり。判定できなければ出さない(設計書 F5)
   fill($('#stats-session'),
     matches.length
-      ? sessionChart(sessionElapsedStats(matches))
+      ? [sessionChart(sessionRows),
+        hold && h('p', { class: 'muted small-note' },
+          `やめどきの目安: ${hold.toEnd ? `${hold.until}分〜の区切りまで勝率50%以上を保てています` : `${hold.until}分までは勝率50%以上を保てています`}`)]
       : h('p', { class: 'muted' }, 'まだ記録がありません。'));
+  showStatsDetail();
+}
 
-  // 時間帯別: ピークタイム/オフピークと、土日/平日を別々に並べる(掛け合わせない)。勝-敗は棒の「?」と同じ仕組みで出す
-  fill($('#stats-time-hint'), hintParas(
-    'ピークタイムは19:00〜24:00、土日は日付(0:00区切り)で判定します。\n疲労や対戦相手の違いは分離できないため、時間帯そのものの影響とは言い切れません。'));
-  const time = timeTagStats(matches);
-  const timeBars = (title, icon, rows, labels) => h('div', { class: 'stat-bars' },
-    h('p', { class: 'stat-sub' }, slotIcon(icon, 14), title),
-    rows.map((s) => {
-      const id = `stat-bar-${s.key}`;
-      const record = `${s.draws ? '勝-敗-分' : '勝-敗'} ${winLossText(s)}`;
-      return h('div', { class: 'bar-row' },
-        h('span', { class: 'bar-label' }, slotIcon(s.key, 16), labels[s.key], ' ', s.total ? refTag(s.total) : null),
-        h('span', { class: 'hint bar-hint' },
-          h('button', { type: 'button', class: s.reference ? 'hint-btn bar ref' : 'hint-btn bar', 'aria-describedby': id, 'aria-label': `${labels[s.key]}の勝-敗` },
-            s.rate === null ? null : h('span', { class: 'bar-fill', style: `width: ${Math.round(s.rate * 100)}%` })),
-          h('span', { role: 'tooltip', id, class: 'hint-body' }, hintParas(record))),
-        h('span', { class: 'bar-rate' }, percent(s.wins, s.wins + s.losses)),
-        h('span', { class: 'bar-games muted' }, `${s.total}試合`));
-    }));
-  fill($('#stats-time'),
-    matches.length
-      ? [
-        timeBars('時間帯', 'clock', time.peak, { peak: 'ピークタイム', offpeak: 'オフピーク' }),
-        timeBars('曜日', 'weekday', time.weekend, { weekend: '土日', weekday: '平日' }),
-      ]
-      : h('p', { class: 'muted' }, 'まだ記録がありません。'));
+// 集計のカードで開いている中身('tried' | 'session' | null)。集計を開くたびに閉じる(設計書 F5)
+let statsOpen = null;
 
-  // 成功の判定: 負けた試合のうち、次に試すことを書けた割合(全試合で1つ。設計書「成功の判定」)。目標は常に出す
-  const { improvementOnLoss: imp, feeling } = reviewRates(matches, state.reviews);
-  const trial = trialProgress(imp.den);
-  fill($('#stats-impr-hint'), hintParas('1試合ごとの揺れで判断せず、まとめて見てください。'));
-  // 負けた試合が試用の数にたまるまでは割合を出さず、たまった数だけを出す(連敗の夜に「0%」を何度も見せないため。設計書 F5)
-  fill($('#stats-impr'),
-    imp.den && !trial.done
-      ? [h('p', { class: 'stat-big' }, `${imp.num}`, h('span', { class: 'muted' }, ` / ${imp.den} 試合で書けた(負けた試合)`)),
-        h('p', { class: 'muted' }, `割合は、負けた試合が${TRIAL_LOSS_GAMES}試合たまったら出します。`)]
-      : imp.den
-      ? h('p', { class: 'stat-big' }, percent(imp.num, imp.den),
-        h('span', { class: 'muted' }, ` ${imp.num} / ${imp.den} 試合`), ' ', refTag(imp.den))
-      : h('p', { class: 'muted' }, '負けた試合がまだありません。'),
-    // 「あと N試合」は出さない(負けるほど進む表示になるため。2026-11-10 専門家レビュー)
-    h('p', { class: 'muted small-note' }, `目標: ${Math.round(IMPROVEMENT_TARGET_RATE * 100)}%以上。`));
+function toggleStatsDetail(key) {
+  statsOpen = statsOpen === key ? null : key;
+  closeChartTips();
+  showStatsDetail();
+}
 
-  // 気持ちの記入率: 「いまの気持ちは?」(自由メモ)を書いた試合の割合。中身は数えず、目標は置かない(設計書 F5)
-  fill($('#stats-feel-hint'), hintParas('記録のはじめの「いまの気持ちは?」(履歴の「気持ちの整理」)を書いた試合の割合です。\n書いたかどうかだけを数え、中身は集計しません。目標はありません。'));
-  fill($('#stats-feel'),
-    feeling.den
-      ? h('p', { class: 'stat-big' }, percent(feeling.num, feeling.den),
-        h('span', { class: 'muted' }, ` ${feeling.num} / ${feeling.den} 試合`), ' ', refTag(feeling.den))
-      : h('p', { class: 'muted' }, 'まだ記録がありません。'));
+function showStatsDetail() {
+  for (const [key, card, panel] of [['tried', '#card-tried', '#stats-tried-panel'], ['session', '#card-hold', '#stats-session-panel']]) {
+    $(card).setAttribute('aria-expanded', String(statsOpen === key));
+    $(panel).hidden = statsOpen !== key;
+  }
+}
+
+// 日時を「今日」「11月19日」のように短く出す。
+function shortDay(iso) {
+  const day = dayKeyOf(new Date(iso));
+  if (day === dayKeyOf(new Date())) return '今日';
+  const [, mo, d] = day.split('-').map(Number);
+  return `${mo}月${d}日`;
+}
+
+// 数字のカード2枚。左は次に試したこと(回数と、今週の分と、小さな積み上げの線)、
+// 右はやめどきの目安(分数と、区切りごとの勝率の小さな棒)。判定できなければ「—」(設計書 F5)
+function renderStatCards(tried, rows, hold) {
+  const W = 100, H = 26;
+  const weeks = tried.weeks;
+  const max = Math.max(1, ...weeks.map((w) => w.total));
+  const px = (i) => (weeks.length > 1 ? 2 + (i * (W - 4)) / (weeks.length - 1) : W / 2);
+  const py = (v) => H - 2 - ((H - 4) * v) / max;
+  const spark = weeks.length > 1
+    ? svg('svg', { class: 'spark', viewBox: `0 0 ${W} ${H}`, 'aria-hidden': 'true', preserveAspectRatio: 'none' },
+      svg('path', { d: `M${weeks.map((w, i) => `${px(i).toFixed(1)} ${py(w.total).toFixed(1)}`).join(' L')}` }))
+    : null;
+  fill($('#card-tried'),
+    h('span', { class: 'card-label' }, '次に試したこと'),
+    h('span', { class: 'card-value' }, `${tried.total}`, h('small', {}, '回')),
+    h('span', { class: 'card-sub' }, tried.thisWeek ? `今週 +${tried.thisWeek}回` : tried.total ? 'これまでの合計' : '「この試合で試した」で数えます'),
+    spark);
+  const rated = rows.filter((r) => r.rate !== null);
+  const bw = W / Math.max(rows.length, 1);
+  const bars = rated.length
+    ? svg('svg', { class: 'spark', viewBox: `0 0 ${W} ${H}`, 'aria-hidden': 'true', preserveAspectRatio: 'none' },
+      ...rows.map((r, i) => (r.rate === null ? null
+        : svg('rect', { class: r.rate < 0.5 ? 'low' : '', x: (i * bw + bw * 0.15).toFixed(1), width: (bw * 0.7).toFixed(1), y: (H - Math.max(2, H * r.rate)).toFixed(1), height: Math.max(2, H * r.rate).toFixed(1), rx: 1.5 }))))
+    : null;
+  fill($('#card-hold'),
+    h('span', { class: 'card-label' }, 'やめどきの目安'),
+    hold
+      ? [h('span', { class: 'card-value' }, `${hold.until}`, h('small', {}, hold.toEnd ? '分〜' : '分')),
+        h('span', { class: 'card-sub' }, hold.toEnd ? 'の区切りまで勝率50%以上' : 'までは勝率50%以上')]
+      : [h('span', { class: 'card-value' }, '—'), h('span', { class: 'card-sub' }, 'まだ目安を出せません')],
+    bars);
+}
+
+// 試した回数の積み上げの折れ線(週ごと。設計書 F5)。上がるか平らになるだけで下がらない。
+function triedChart(weeks) {
+  const W = 360, left = 36, right = 350, top = 14, bottom = 130;
+  const max = Math.max(1, weeks.at(-1)?.total ?? 0);
+  // 目盛りは 0・半分・上端(上端は切りのよい数)
+  const unit = max <= 10 ? 2 : max <= 50 ? 10 : 50;
+  const ceil = Math.ceil(max / unit) * unit;
+  const x = (i) => (weeks.length > 1 ? left + 4 + ((right - left - 8) * i) / (weeks.length - 1) : (left + right) / 2);
+  const y = (v) => bottom - ((bottom - top) * v) / ceil;
+  const pts = weeks.map((w, i) => `${x(i).toFixed(1)} ${y(w.total).toFixed(1)}`);
+  const text = (attrs, s) => svg('text', attrs, s);
+  const label = (w) => { const [, mo, d] = w.start.split('-').map(Number); return `${mo}/${d}`; };
+  return svg('svg', { class: 'session-chart tried-chart', viewBox: `0 0 ${W} 150`, role: 'img', 'aria-label': `これまでに試した回数の週ごとの累計。${weeks.map((w) => `${label(w)}の週まで${w.total}回`).join('、')}` },
+    ...[top, (top + bottom) / 2, bottom].map((v) => svg('line', { class: 'grid', x1: left, x2: right, y1: v, y2: v })),
+    ...[[ceil, top], [ceil / 2, (top + bottom) / 2], [0, bottom]].map(([v, yy]) => text({ x: left - 6, y: yy + 4, 'text-anchor': 'end' }, `${v}`)),
+    weeks.length > 1 ? svg('path', { class: 'area', d: `M${pts.join(' L')} L${x(weeks.length - 1).toFixed(1)} ${bottom} L${x(0).toFixed(1)} ${bottom} Z` }) : null,
+    weeks.length > 1 ? svg('path', { class: 'line', d: `M${pts.join(' L')}` }) : null,
+    svg('circle', { class: 'pt', cx: x(weeks.length - 1), cy: y(weeks.at(-1).total), r: 4 }),
+    weeks.length > 1 ? text({ x: x(0), y: 146, 'text-anchor': 'start' }, label(weeks[0])) : null,
+    text({ x: x(weeks.length - 1), y: 146, 'text-anchor': weeks.length > 1 ? 'end' : 'middle' }, '今週'));
 }
 
 // セッション開始からの経過時間別の勝率の折れ線グラフ(設計書 F5)。縦軸は0〜100%で、勝ち・負けのない区分には点を打たない。

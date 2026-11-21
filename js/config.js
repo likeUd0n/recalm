@@ -1,11 +1,6 @@
 // 設定値。「仮置き」と書いたもの(下書きの24時間など)は docs/design.md で確定していない値なので、
 // 変更・確定する前にユーザーに確認すること(CLAUDE.md ルール4)。
 
-// 成功の判定(負けた試合のうち改善点を書けた割合)の目標と試用の長さ(設計書「成功の判定」)。
-// 目標は私(Claude)の案(2026-10-19、ユーザーの依頼)。試用は負けた試合が TRIAL_LOSS_GAMES 試合たまるまで。
-export const IMPROVEMENT_TARGET_RATE = 0.7;
-export const TRIAL_LOSS_GAMES = 10;
-
 // 時間帯の5区分(ユーザー指定、日本サーバー基準。2026-10-19 に6区分から変更)。start <= 時 < end。end < start のものは日付をまたぐ。
 // desc は区分名にカーソルを合わせたときに出す特徴(設計書 F3)。
 // 変えた場合も、起動時に既存の試合の時間帯を入力時刻から計算し直す。
@@ -83,12 +78,11 @@ export const AUTOSAVE_FILE = 'recalm-backup.json';
 export const AUTOSAVE_DELAY_MS = 2000;
 // フォルダを選べないブラウザ(Firefox など)の、記録のたびの自動ダウンロード。{ enabled, lastAt } を持つ meta のキー
 export const AUTODOWNLOAD_META_KEY = 'autoDownload';
-// 表示の設定(設計書 画面設計 設定)。{ today, stats } を持つ meta のキー。記録と一緒にバックアップに含める。
+// 表示の設定(設計書 画面設計 設定)。{ today } を持つ meta のキー。記録と一緒にバックアップに含める。
 // today: メニューバーと集計の今日の表示('count' 試合数だけ / 'record' 勝敗 / 'none' 出さない)。
-// stats: 集計の並び順('habit' 書けた割合を先に / 'winrate' 勝率を先に)。
-// 初期値は目的(感情的にならずに楽しむ)に合わせ、勝ち負けより振り返りの習慣が目に入るようにする(2026-11-09)。
+// 初期値は目的(感情的にならずに楽しむ)に合わせる(2026-11-09)。以前の stats(集計の並び順)は 2026-11-21 に外した。
 export const DISPLAY_META_KEY = 'display';
-export const DISPLAY_DEFAULTS = { today: 'count', stats: 'habit' };
+export const DISPLAY_DEFAULTS = { today: 'count' };
 // 書き出しにも取り込みにも含めない meta のキー
 export const DEVICE_META_KEYS = [BACKUP_META_KEY, AUTOSAVE_META_KEY, AUTODOWNLOAD_META_KEY];
 

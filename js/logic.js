@@ -2,7 +2,7 @@
 import {
   TIME_SLOTS, PEAK_SLOT_IDS, ROLES, UNKNOWN_ROLE_LABEL, DAY_START_HOUR,
   BACKUP_STORES, BACKUP_STALE_DAYS, DEVICE_META_KEYS, REFERENCE_MIN_GAMES,
-  SKILL_GAPS, SKILL_GAP_ALIASES, DRAFT_MAX_AGE_HOURS, TRIAL_LOSS_GAMES,
+  SKILL_GAPS, SKILL_GAP_ALIASES, DRAFT_MAX_AGE_HOURS,
   SESSION_GAP_MINUTES, SESSION_ELAPSED_STEP_MINUTES,
 } from './config.js';
 
@@ -250,7 +250,7 @@ export function askSteps(result) {
 
 // ---------- 入力途中の下書き(設計書「簡易入力の設計」) ----------
 
-// 問いかけ入力の状態: answers = 保存する前の答え { memo, result, skillGap, mapId, heroId }、
+// 問いかけ入力の状態: answers = 保存する前の答え { memo, result, skillGap, mapId, heroId, otherHeroIds }(heroId は1人目)、
 // step = いまの問い、matchId = 保存した試合(保存前は null)、text = 入力欄に打ちかけの文。
 export function isAskEmpty(ask) {
   const a = ask.answers;
@@ -264,7 +264,7 @@ export function buildDraft(ask, now = new Date()) {
   return {
     version: 2,
     savedAt: now.toISOString(),
-    answers: { memo: a.memo ?? '', result: a.result ?? null, skillGap: a.skillGap ?? null, mapId: a.mapId ?? null, heroId: a.heroId ?? null },
+    answers: { memo: a.memo ?? '', result: a.result ?? null, skillGap: a.skillGap ?? null, mapId: a.mapId ?? null, heroId: a.heroId ?? null, otherHeroIds: a.otherHeroIds ?? [] },
     step: ask.step,
     matchId: ask.matchId ?? null,
     text: ask.text ?? '',
@@ -295,6 +295,8 @@ export function restoreDraft(text, { now = new Date(), mapIds, heroById, matchId
       skillGap: SKILL_GAPS.some((g) => g.id === a.skillGap) ? a.skillGap : SKILL_GAP_ALIASES[a.skillGap] ?? null,
       mapId: mapIds.has(a.mapId) ? a.mapId : null,
       heroId: heroById.has(a.heroId) ? a.heroId : null,
+      // 2人目からのヒーロー(2026-11-21 より前の下書きにはない)。1人目がなければ戻さない
+      otherHeroIds: heroById.has(a.heroId) && Array.isArray(a.otherHeroIds) ? a.otherHeroIds.filter((x) => heroById.has(x)) : [],
     },
     matchId: d.matchId ?? null,
     text: typeof d.text === 'string' ? d.text.slice(0, 300) : '',
@@ -417,33 +419,11 @@ export function statsScope(matches) {
   return { total: times.length, from: jstParts(new Date(Math.min(...times))), to: jstParts(new Date(Math.max(...times))) };
 }
 
-// 時間帯別の勝敗(設計書「集計指標」)。入力時刻(createdAt)からタグを計算し、2つの区分を別々の表にする。
-// 戻り値は { peak: [ピークタイム, オフピーク], weekend: [土日, 平日] }。各行は { key, wins, losses, draws, total, rate, reference }。
-// 勝率は 勝ち÷(勝ち+負け) で、引き分けは入れない。試合数(total)には引き分けも含める。
-// 試合が0件の行も残す(rate は null)。入力時刻が読めない試合は数えない。
-export function timeTagStats(matches) {
-  const row = (key) => ({ key, wins: 0, losses: 0, draws: 0, total: 0 });
-  const rows = { peak: row('peak'), offpeak: row('offpeak'), weekend: row('weekend'), weekday: row('weekday') };
-  const add = (r, m) => {
-    countResult(r, m);
-    r.total += 1;
-  };
-  for (const m of matches) {
-    const d = new Date(m.createdAt);
-    if (Number.isNaN(d.getTime())) continue;
-    const tags = matchTimeTags(d);
-    add(tags.peak ? rows.peak : rows.offpeak, m);
-    add(tags.weekend ? rows.weekend : rows.weekday, m);
-  }
-  const done = (r) => ({ ...r, rate: r.wins + r.losses ? r.wins / (r.wins + r.losses) : null, reference: r.total < REFERENCE_MIN_GAMES });
-  return { peak: [done(rows.peak), done(rows.offpeak)], weekend: [done(rows.weekend), done(rows.weekday)] };
-}
-
 // セッション開始からの経過時間で分けた勝敗(設計書「集計指標」)。入力時刻の順に並べ、前の試合から
 // SESSION_GAP_MINUTES 分以上あいたら新しいセッションとし、その最初の試合からの経過時間を SESSION_ELAPSED_STEP_MINUTES 分ごとに分ける。
 // 試合数が REFERENCE_MIN_GAMES 未満の区分が出たら、その区分から後ろを1つにまとめる。後ろに試合がない区分もまとめた扱いにする。
 // 戻り値は行 { from, last, wins, losses, draws, total, rate, reference } の配列(from は区分の始まりの分。last の行は「from 分〜」)。
-// 記録がなければ空の配列。勝率と参考値は timeTagStats と同じ決まり。
+// 記録がなければ空の配列。勝率は 勝ち÷(勝ち+負け) で引き分けは入れず、試合数(total)には引き分けも含める。
 export function sessionElapsedStats(matches) {
   const timed = matches
     .map((m) => ({ m, t: new Date(m.createdAt).getTime() }))
@@ -473,11 +453,70 @@ export function sessionElapsedStats(matches) {
   return rows.map((r) => ({ ...r, rate: r.wins + r.losses ? r.wins / (r.wins + r.losses) : null, reference: r.total < REFERENCE_MIN_GAMES }));
 }
 
-// 成功の判定の試用の進み具合。負けた試合が TRIAL_LOSS_GAMES 試合たまるまでが試用(設計書「成功の判定」)。
-// 戻り値は { done: たまったか, remaining: あと何試合か }。
-export function trialProgress(lossCount) {
-  const remaining = Math.max(0, TRIAL_LOSS_GAMES - lossCount);
-  return { done: remaining === 0, remaining };
+// 勝率50%以上を保てた時間の目安(設計書 F5。2026-11-21 ユーザー指定の判定方法)。sessionElapsedStats の行を0分から順に見て、
+// 参考値でなく勝率50%以上の区分が続く限り進む。参考値・勝率なし・50%未満の区分で止まる。
+// 戻り値は { until: 保てた区分の終わりの分, toEnd: 最後の「N分〜」まで保てたか }。最初の区分で止まれば null(出さない)。
+export function winRateHold(rows) {
+  let hold = null;
+  for (const r of rows) {
+    if (r.reference || r.rate === null || r.rate < 0.5) break;
+    if (r.last) return { until: r.from, toEnd: true };
+    hold = { until: r.from + SESSION_ELAPSED_STEP_MINUTES, toEnd: false };
+  }
+  return hold;
+}
+
+// その日(YYYY-MM-DD)を含む週の月曜日を YYYY-MM-DD で返す(集計の「今週」と週ごとの積み上げ。設計書 F5)。
+export function weekStartKey(dayKey) {
+  const [y, m, d] = dayKey.split('-').map(Number);
+  const weekday = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+  return shiftDayKey(dayKey, -((weekday + 6) % 7));
+}
+
+// 前回の「次に試すこと」を、最後に保存した試合より後に「試した」と押しているか(設計書「簡易入力の設計」)。
+// 押していれば、その押した日時(ISO)を返す。なければ null。
+export function triedSinceLastMatch(tried, matches) {
+  const last = matches.reduce((a, m) => (m.createdAt > a ? m.createdAt : a), '');
+  return (tried ?? []).findLast((t) => t > last) ?? null;
+}
+
+// 「次に試したこと」の集計(設計書 F5)。reviews は Map<matchId, Review>、now は Date。
+// 戻り値: { total: 全期間の回数, thisWeek: 今週(月曜0:00から)の回数,
+//   weeks: 最初に押した週から今週までの [{ start: 週の月曜, total: その週までの累計 }],
+//   recent: 最近試したこと [{ text, at: 最後に押した日時 }] を新しい順に3件(同じ文は1件にまとめる) }
+export function triedStats(matches, reviews, now) {
+  const taps = [];
+  for (const m of matches) {
+    const r = reviews.get(m.id);
+    if (!r?.tried?.length) continue;
+    // その試合の次に試すこと: 負けは improvement、勝ち・引き分けは nextMove(latestNextMove と同じ)
+    const text = (m.result === 'loss' ? r.improvement : r.nextMove) ?? r.improvement ?? r.nextMove ?? '';
+    for (const at of r.tried) taps.push({ at, text: text.trim() });
+  }
+  taps.sort((a, b) => a.at.localeCompare(b.at));
+  const weekOf = (iso) => weekStartKey(dayKeyOf(new Date(iso)));
+  const thisWeekStart = weekStartKey(dayKeyOf(now));
+  const weeks = [];
+  if (taps.length) {
+    let count = 0;
+    let i = 0;
+    for (let w = weekOf(taps[0].at); w <= thisWeekStart; w = shiftDayKey(w, 7)) {
+      while (i < taps.length && weekOf(taps[i].at) <= w) { count += 1; i += 1; }
+      weeks.push({ start: w, total: count });
+    }
+  }
+  const recent = [];
+  for (const t of [...taps].reverse()) {
+    if (recent.length >= 3) break;
+    if (!t.text || recent.some((x) => x.text === t.text)) continue;
+    recent.push(t);
+  }
+  return {
+    total: taps.length,
+    thisWeek: taps.filter((t) => weekOf(t.at) === thisWeekStart).length,
+    weeks,
+    recent,
+  };
 }
 
 // 直近に選んだマップの id を新しい順に重複なしで返す。
@@ -613,6 +652,42 @@ export function searchByName(items, query, recentIds) {
     const ys = ks.length ? [].concat(m.yomi ?? []).flatMap(foldKana) : [];
     return ys.some((y) => ks.some((k) => k && y.startsWith(k))) ? 3 : -1;
   });
+}
+
+// ヒーローの問いの入力を、空白(、→ も)で区切った複数のヒーローに分ける(設計書 F2。2026-11-21 ユーザー指定)。
+// 名前に空白を含むヒーロー(Junker Queen など)のため、続く語(3語まで)をつなげて一致を見る。最後の語は打ちかけとして query に返し、
+// それより前の語は1人ずつ、一致した候補の先頭に決める(一致しない語は捨てる)。text が区切りで終われば query は空。
+// 戻り値は { ids: 決まったヒーロー(重複なし・打った順), head: query より前の文, query }。
+const HERO_SEP = /[\s,、→]+/;
+export function splitHeroInput(items, text, recentIds = []) {
+  const words = text.split(HERO_SEP).filter(Boolean);
+  // 2語以上をつなげた一致は、名前に空白・記号を含むヒーローだけを採る(「tracer genji」を1人にしない)
+  const spaced = (m) => /[\s:.]/.test(m.name);
+  const multi = (k, hits) => k === 1 || hits.some(spaced);
+  const hitOf = (ws) => {
+    for (let k = Math.min(3, ws.length); k >= 1; k--) {
+      const hits = searchByName(items, ws.slice(0, k).join(' '), recentIds);
+      if (hits.length && multi(k, hits)) return { k, m: k === 1 ? hits[0] : hits.find(spaced) };
+    }
+    return null;
+  };
+  // 打ちかけの語: 末尾から3語までで、つなげて候補が出る最も長いもの
+  let tail = 0;
+  if (words.length && !/[\s,、→]$/.test(text)) {
+    tail = 1;
+    for (let k = Math.min(3, words.length); k > 1; k--) {
+      const hits = searchByName(items, words.slice(-k).join(' '), recentIds);
+      if (hits.length && multi(k, hits)) { tail = k; break; }
+    }
+  }
+  const head = words.slice(0, words.length - tail);
+  const ids = [];
+  for (let i = 0; i < head.length;) {
+    const hit = hitOf(head.slice(i));
+    if (hit && !ids.includes(hit.m.id)) ids.push(hit.m.id);
+    i += hit?.k ?? 1;
+  }
+  return { ids, head: head.join(' '), query: words.slice(words.length - tail).join(' ') };
 }
 
 function rankedHits(items, recentIds, rank) {

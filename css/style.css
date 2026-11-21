@@ -334,6 +334,8 @@ textarea { width: 100%; }
 .prev-imp-main h2 { margin: 0; font-size: var(--fs-sm); color: var(--text); font-weight: 700; white-space: nowrap; }
 .prev-imp-text { margin: 0; font-size: var(--fs-md); line-height: 1.6; white-space: pre-line; }
 .prev-imp-top a { font-size: var(--fs-sm); white-space: nowrap; }
+.prev-imp-tried { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--s3); font-size: var(--fs-sm); }
+.prev-imp-tried button.link[aria-pressed="true"] { color: var(--ok-text); text-decoration: none; font-weight: 700; }
 .prev-imp-from { margin: 0; font-size: var(--fs-sm); white-space: pre-line; }
 .prev-imp-sub { margin: 0; font-size: var(--fs-sm); }
 
@@ -354,11 +356,7 @@ textarea { width: 100%; }
 
 /* ロールのアイコン(自作の図形) */
 .role-icon { display: block; flex: none; }
-/* 集計の表のアイコン */
-.stat-sub .slot-icon, .bar-label .slot-icon { vertical-align: -3px; margin-right: var(--s1); }
-.stat-sub .slot-icon { color: var(--muted); }
 .slot-peak { color: var(--q-good); } .slot-offpeak { color: var(--q-bad); }
-.slot-weekend { color: var(--accent); } .slot-weekday { color: var(--muted); }
 .role-icon.role-tank { color: var(--role-tank); }
 .role-icon.role-damage { color: var(--role-damage); }
 .role-icon.role-support { color: var(--role-support); }
@@ -478,6 +476,8 @@ textarea.ask-input, textarea.ask-input:focus, textarea.ask-input:focus-visible {
 }
 .opt[aria-selected="true"] { border-color: var(--accent); background: var(--accent-soft); font-weight: 700; }
 .opt-empty { color: var(--muted); font-size: var(--fs-sm); }
+/* 1人目と違うロールのヒーローを打ったときの説明(選べない理由を、候補の並びの下に1行で) */
+.opt-block { flex-basis: 100%; color: var(--warn); }
 /* マッチの質は、3つの候補を味方(左)→相手(右)の同じ幅の1列にし、上に向きの見出しを付ける。選んでいるあいだはほかを薄くする(設計書「簡易入力の設計」) */
 .ask-opts.gap-scale { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px var(--s2); }
 .gap-scale .scale-ends { grid-column: 1 / -1; display: flex; justify-content: space-between; font-size: var(--fs-sm); font-weight: 700; }
@@ -499,6 +499,9 @@ textarea.ask-input, textarea.ask-input:focus, textarea.ask-input:focus-visible {
 /* マップ・ヒーロー一覧への控えめなリンク(設計書 F1・F2) */
 .ask-browse { margin: 0; font-size: var(--fs-sm); }
 .ask-browse[hidden] { display: none; }
+/* map・hero を打つ途中に出す「一覧を開く」候補。マップ・ヒーローの候補と見分けられるよう破線にする */
+.opt-cmd { border-style: dashed; color: var(--muted); }
+.opt-cmd[aria-selected="true"] { color: var(--accent); }
 /* 一覧オーバーレイ(設計書 F1・F2) */
 .browse-layer {
   position: fixed; inset: 0; z-index: 110;
@@ -549,6 +552,9 @@ textarea.ask-input, textarea.ask-input:focus, textarea.ask-input:focus-visible {
   padding-top: var(--s2); border-top: 1px solid var(--border);
   font-size: var(--fs-sm); color: var(--muted);
 }
+/* キーの説明は、まとまりの途中で折り返さない */
+.browse-keys { display: flex; flex-wrap: wrap; gap: 2px var(--s4); }
+.browse-keys > span { white-space: nowrap; }
 @media (max-width: 480px) {
   .browse-card { padding: var(--s4); }
   .browse-grid, .browse-grid.is-map { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -718,15 +724,38 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: var(--fs-sm); 
 @media (min-width: 1440px) { dialog { max-height: calc((100vh - 32px) / 1.125); } }
 @media (min-width: 1800px) { dialog { max-height: calc((100vh - 32px) / 1.25); } }
 
-/* 集計・バックアップ */
-.stat-big { font-size: 40px; font-weight: 800; line-height: 1.1; margin: var(--s3) 0 var(--s1); font-variant-numeric: tabular-nums; }
-.stat-big .muted { font-size: var(--fs-md); font-weight: normal; }
+/* 集計: 数字のカード2枚(設計書 F5)。押すと下に詳しい中身を1つだけ開き、開いたカードに枠を付ける */
+.stat-cards { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3); margin: var(--s4) 0; }
+.stat-card {
+  display: grid; gap: 2px; align-content: start; text-align: left; font: inherit; color: var(--text);
+  background: var(--panel); border: 2px solid transparent; border-radius: var(--r-card); box-shadow: var(--shadow);
+  padding: var(--s4);
+}
+.stat-card:hover:not(:disabled) { border-color: var(--border); }
+.stat-card[aria-expanded="true"], .stat-card[aria-expanded="true"]:hover:not(:disabled) { border-color: var(--accent); }
+.card-label { font-size: var(--fs-sm); font-weight: 700; color: var(--muted); }
+.card-value { font-size: 32px; font-weight: 800; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.card-value small { font-size: var(--fs-md); font-weight: 700; margin-left: 2px; }
+.stat-card.main .card-value { color: var(--accent); }
+.card-sub { font-size: var(--fs-sm); color: var(--muted); }
+.spark { display: block; width: 100%; height: 26px; margin-top: var(--s1); overflow: visible; }
+.spark path { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.spark rect { fill: var(--accent); opacity: .55; }
+.spark rect.low { fill: var(--loss); }
+.stat-detail { margin-top: 0; }
+.stat-sub { font-size: var(--fs-md); margin: var(--s3) 0 var(--s1); }
+.tried-recent { list-style: none; margin: 0; padding: 0; display: grid; }
+.tried-recent li { display: flex; justify-content: space-between; gap: var(--s3); padding: var(--s1) 0; border-top: 1px solid var(--border); }
+.tried-recent li .muted { white-space: nowrap; font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+@media (max-width: 640px) {
+  .stat-cards { gap: var(--s2); }
+  .stat-card { padding: var(--s3); }
+  .card-value { font-size: 26px; }
+}
 /* 集計の見出し横の「?」: 説明文は太字にせず、見出しの左端から見出しの幅に収める(狭い画面ではみ出さない) */
 .panel h2:has(.hint) { position: relative; }
 .panel h2 .hint { position: static; }
 .panel h2 .hint-body { font-weight: normal; max-width: 100%; }
-/* 時間帯別の勝率の横棒(設計書 F5)。時間帯と曜日で縦列がそろうよう、列幅を固定する。白抜きの棒は参考値 */
-.stat-bars { margin: var(--s3) 0; }
 .stats-scope { font-size: var(--fs-sm); margin: var(--s4) 0 0; }
 .stats-today { font-size: var(--fs-sm); margin: var(--s1) 0 0; display: flex; flex-wrap: wrap; gap: var(--s1) var(--s3); align-items: baseline; font-variant-numeric: tabular-nums; }
 .stats-today .w { color: var(--win-text); font-weight: 700; }
@@ -741,27 +770,11 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: var(--fs-sm); 
   display: grid; gap: 6px; margin: var(--s3) 0 var(--s4);
   padding: var(--s3) var(--s4); border: 1px solid var(--accent); border-radius: var(--r-ctl); background: var(--panel);
 }
+.stats-few[hidden] { display: none; }
 .few-text { margin: 0; font-weight: 600; }
 .few-bar { height: 8px; border-radius: 999px; background: var(--panel-2); overflow: hidden; }
 .few-bar span { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
 .few-count { font-size: var(--fs-sm); color: var(--muted); font-variant-numeric: tabular-nums; }
-.stat-sub { font-size: var(--fs-sm); color: var(--muted); margin: 0 0 var(--s1); }
-.bar-row {
-  display: grid; grid-template-columns: minmax(7.5em, 38%) 1fr 3.2em 4.2em; align-items: center; gap: var(--s2);
-  padding: var(--s2) 0; border-bottom: 1px solid rgba(128, 128, 128, .25); font-variant-numeric: tabular-nums;
-}
-.bar-label { display: flex; flex-wrap: wrap; align-items: center; gap: 2px var(--s1); }
-.bar-label .slot-icon { margin-right: 0; }
-.bar-hint { display: block; }
-.hint-btn.bar {
-  display: block; width: 100%; height: 14px; border-radius: 999px; overflow: hidden;
-  background: var(--panel-2); border: 1.5px solid transparent;
-}
-.hint-btn.bar.ref { border-color: var(--accent); background: var(--panel); }
-.bar-fill { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
-.hint-btn.bar.ref .bar-fill { background: var(--accent-soft); }
-.bar-rate { text-align: right; font-weight: 700; }
-.bar-games { text-align: right; font-size: var(--fs-sm); }
 /* セッション開始からの経過時間別の勝率の折れ線(設計書 F5)。白抜きの点は参考値、50%未満は青灰 */
 .chart-box { position: relative; }
 .session-chart { display: block; width: 100%; max-width: 560px; height: auto; margin: var(--s2) 0; }

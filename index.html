@@ -77,6 +77,8 @@
         </div>
         <a href="#matches" id="prev-imp-more">振り返りをもっと見る</a>
       </div>
+      <!-- 試した(設計書「簡易入力の設計」)。押さなくても何も残らない。押した回数だけを数える -->
+      <p class="prev-imp-tried"><button type="button" class="link" id="prev-imp-try" aria-pressed="false">この試合で試した</button><span class="muted" id="prev-imp-count" hidden></span></p>
       <p class="muted prev-imp-from" id="prev-imp-from" hidden></p>
       <p class="muted prev-imp-sub" id="prev-imp-meta"></p>
     </section>
@@ -110,12 +112,26 @@
 
   <dialog id="match-dialog" aria-labelledby="match-dialog-title"></dialog>
 
-  <!-- 集計(F5)。はじめは上から、成功の判定=負けた試合の次に試すことの記入率、気持ちの記入率、セッション開始からの経過時間別の勝率、時間帯別の勝率(設定の「集計の並び順」で勝率を先にできる。並べ替えは app.js)。勝率には必ず試合数を添える。注意書きは見出し横の「?」に入れる -->
+  <!-- 集計(F5)。数字のカードを2枚(次に試したこと・やめどきの目安)並べ、押すと下に詳しい中身を1つだけ開く。
+       勝率には必ず試合数を添える。注意書きは見出し横の「?」に入れる -->
   <main id="view-stats" hidden>
     <p class="stats-scope muted" id="stats-scope" hidden></p>
     <p class="stats-today" id="stats-today" hidden></p>
     <div class="stats-few" id="stats-few" hidden></div>
-    <section class="panel" id="stats-session-panel" aria-labelledby="stats-session-title">
+    <div class="stat-cards">
+      <button type="button" class="stat-card main" id="card-tried" aria-expanded="false" aria-controls="stats-tried-panel"></button>
+      <button type="button" class="stat-card" id="card-hold" aria-expanded="false" aria-controls="stats-session-panel"></button>
+    </div>
+    <section class="panel stat-detail" id="stats-tried-panel" aria-labelledby="stats-tried-title" hidden>
+      <h2><span id="stats-tried-title">これまでに試した回数</span>
+        <span class="hint">
+          <button type="button" class="hint-btn" aria-describedby="stats-tried-hint" aria-label="試した回数の数え方">?</button>
+          <span role="tooltip" id="stats-tried-hint" class="hint-body"></span>
+        </span>
+      </h2>
+      <div id="stats-tried"></div>
+    </section>
+    <section class="panel stat-detail" id="stats-session-panel" aria-labelledby="stats-session-title" hidden>
       <h2><span id="stats-session-title">セッション開始からの経過時間で分けた勝率</span>
         <span class="hint">
           <button type="button" class="hint-btn" aria-describedby="stats-session-hint" aria-label="グラフの読み方とセッションの区切り">?</button>
@@ -123,33 +139,6 @@
         </span>
       </h2>
       <div id="stats-session"></div>
-    </section>
-    <section class="panel" id="stats-time-panel" aria-labelledby="stats-time-title">
-      <h2><span id="stats-time-title">時間帯別の勝率</span>
-        <span class="hint">
-          <button type="button" class="hint-btn" aria-describedby="stats-time-hint" aria-label="時間帯の判定と注意点">?</button>
-          <span role="tooltip" id="stats-time-hint" class="hint-body"></span>
-        </span>
-      </h2>
-      <div id="stats-time"></div>
-    </section>
-    <section class="panel" id="stats-impr-panel" aria-labelledby="stats-impr-title">
-      <h2><span id="stats-impr-title">次に試すことを書けた割合(負けた試合)</span>
-        <span class="hint">
-          <button type="button" class="hint-btn" aria-describedby="stats-impr-hint" aria-label="次に試すことを書けた割合の説明">?</button>
-          <span role="tooltip" id="stats-impr-hint" class="hint-body"></span>
-        </span>
-      </h2>
-      <div id="stats-impr"></div>
-    </section>
-    <section class="panel" id="stats-feel-panel" aria-labelledby="stats-feel-title">
-      <h2><span id="stats-feel-title">気持ちを書いた割合</span>
-        <span class="hint">
-          <button type="button" class="hint-btn" aria-describedby="stats-feel-hint" aria-label="気持ちを書いた割合の説明">?</button>
-          <span role="tooltip" id="stats-feel-hint" class="hint-body"></span>
-        </span>
-      </h2>
-      <div id="stats-feel"></div>
     </section>
   </main>
 
@@ -195,12 +184,6 @@
         <label class="inline"><input type="radio" name="pref-today" value="record"> 勝敗</label>
         <label class="inline"><input type="radio" name="pref-today" value="none"> 出さない</label>
       </fieldset>
-      <fieldset class="pref">
-        <legend>集計の並び順</legend>
-        <label class="inline"><input type="radio" name="pref-stats" value="habit"> 書けた割合を先に</label>
-        <label class="inline"><input type="radio" name="pref-stats" value="winrate"> 勝率を先に</label>
-      </fieldset>
-      <p class="muted small-note">はじめは、勝ち負けより振り返りの習慣が目に入るようにしています。</p>
     </section>
     <p class="small-note"><a href="about.html">recalm について(使い方)</a> · <a class="github-link" href="https://github.com/likeUd0n/recalm" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a></p>
     <p class="muted small-note" id="disclaimer">本アプリケーションは個人が開発した非公式のファンアプリであり、Blizzard Entertainment社とは一切関係ありません。<br>Overwatchをはじめとするゲームタイトル、ロゴ、および関連するすべての知的財産は、Blizzard Entertainment, Inc.に帰属します。</p>

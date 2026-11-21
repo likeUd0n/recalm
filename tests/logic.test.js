@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {
   dayKeyOf, normalizeMatch, matchesNeedingUpdate, runningTallies, dailyTally, tallyText,
   shiftDayKey, reviewRates, isPeakTime, isWeekendDay, matchTimeTags, timeSlotOf,
-  buildBackup, parseBackup, backupStatus, timeTagStats, statsScope, sessionElapsedStats, trialProgress, askSteps, isAskEmpty, buildDraft, restoreDraft,
+  buildBackup, parseBackup, backupStatus, statsScope, sessionElapsedStats, winRateHold, splitHeroInput, weekStartKey, triedSinceLastMatch, triedStats, askSteps, isAskEmpty, buildDraft, restoreDraft,
   searchByName, roleRecords, reviewEntries, latestNextMove,
 } from '../js/logic.js';
 
@@ -168,29 +168,6 @@ test('土日の判定は日付(0:00区切り)で行う(2026-10-17 は土曜、10
   assert.deepEqual(matchTimeTags(at(2026, 10, 17, 21, 0)), { peak: true, weekend: true });
 });
 
-test('時間帯別の勝敗: ピークタイム/オフピークと土日/平日は別々に数える(5試合の手計算)', () => {
-  const m = (id, d, result) => ({ id, createdAt: d.toISOString(), result });
-  const ms = [
-    m('1', at(2026, 10, 19, 21, 0), 'win'), // 月曜21:00 → ピーク・平日
-    m('2', at(2026, 10, 19, 21, 30), 'loss'), // 月曜21:30 → ピーク・平日
-    m('3', at(2026, 10, 19, 10, 0), 'win'), // 月曜10:00 → オフピーク・平日
-    m('4', at(2026, 10, 17, 21, 0), 'win'), // 土曜21:00 → ピーク・土日
-    m('5', at(2026, 10, 19, 2, 0), 'loss'), // 月曜2:00 → オフピーク・平日
-  ];
-  // ピーク: 1(勝)・2(負)・4(勝) → 2-1(3試合)。オフピーク: 3(勝)・5(負) → 1-1(2試合)。
-  // 土日: 4(勝) → 1-0(1試合)。平日: 1(勝)・2(負)・3(勝)・5(負) → 2-2(4試合)。どれも10試合未満なので参考値。
-  const s = timeTagStats(ms);
-  const pick = (rows) => rows.map((r) => [r.key, r.wins, r.losses, r.total, r.reference]);
-  assert.deepEqual(pick(s.peak), [['peak', 2, 1, 3, true], ['offpeak', 1, 1, 2, true]]);
-  assert.deepEqual(pick(s.weekend), [['weekend', 1, 0, 1, true], ['weekday', 2, 2, 4, true]]);
-  assert.equal(s.peak[0].rate, 2 / 3);
-  // 記録がなければ、どの行も0試合で勝率は null
-  const empty = timeTagStats([]);
-  assert.deepEqual(empty.peak.map((r) => [r.total, r.rate]), [[0, null], [0, null]]);
-  // 入力時刻が読めない試合は数えない
-  assert.equal(timeTagStats([{ id: 'x', createdAt: 'x', result: 'win' }]).peak[0].total, 0);
-});
-
 test('セッションの経過時間: 30分ごとに分け、10試合未満の区分から後ろをまとめる', () => {
   const m = (id, d, result) => ({ id, createdAt: d.toISOString(), result });
   const ms = [
@@ -220,11 +197,59 @@ test('セッションの経過時間: 30分ごとに分け、10試合未満の�
   assert.deepEqual(sessionElapsedStats([{ id: 'x', createdAt: 'x', result: 'win' }]), []);
 });
 
-test('成功の判定の試用: 負けた試合が10試合たまるまでの残りを数える', () => {
-  assert.deepEqual(trialProgress(0), { done: false, remaining: 10 });
-  assert.deepEqual(trialProgress(7), { done: false, remaining: 3 });
-  assert.deepEqual(trialProgress(10), { done: true, remaining: 0 });
-  assert.deepEqual(trialProgress(12), { done: true, remaining: 0 });
+test('winRateHold: 0分から続けて勝率50%以上だった区分の終わりを返す', () => {
+  const r = (from, rate, total, last = false) => ({ from, rate, total, last, reference: total < 10 });
+  // 0〜30・30〜60 は50%以上、60〜90 で下回る → 60分まで
+  assert.deepEqual(winRateHold([r(0, 0.6, 10), r(30, 0.5, 12), r(60, 0.4, 10), r(90, 0.7, 3, true)]), { until: 60, toEnd: false });
+  // 参考値の区分で止まる
+  assert.deepEqual(winRateHold([r(0, 0.6, 10), r(30, 0.8, 4, true)]), { until: 30, toEnd: false });
+  // 最後の「N分〜」まで保てた
+  assert.deepEqual(winRateHold([r(0, 0.6, 10), r(30, 0.6, 10, true)]), { until: 30, toEnd: true });
+  // 最初の区分で止まれば出さない
+  assert.equal(winRateHold([r(0, 0.4, 10), r(30, 0.6, 10, true)]), null);
+  assert.equal(winRateHold([r(0, 0.9, 5, true)]), null);
+  assert.equal(winRateHold([]), null);
+});
+
+test('weekStartKey: その日を含む週の月曜日を返す', () => {
+  assert.equal(weekStartKey('2026-11-21'), '2026-11-16'); // 土曜
+  assert.equal(weekStartKey('2026-11-16'), '2026-11-16'); // 月曜
+  assert.equal(weekStartKey('2026-11-22'), '2026-11-16'); // 日曜
+  assert.equal(weekStartKey('2026-11-02'), '2026-11-02');
+});
+
+test('triedSinceLastMatch: 最後に保存した試合より後に押したものだけを返す', () => {
+  const ms = [{ createdAt: at(2026, 11, 21, 20).toISOString() }, { createdAt: at(2026, 11, 21, 21).toISOString() }];
+  const before = at(2026, 11, 21, 20, 30).toISOString();
+  const after = at(2026, 11, 21, 21, 10).toISOString();
+  assert.equal(triedSinceLastMatch([before], ms), null);
+  assert.equal(triedSinceLastMatch([before, after], ms), after);
+  assert.equal(triedSinceLastMatch(undefined, ms), null);
+  assert.equal(triedSinceLastMatch([after], []), after);
+});
+
+test('triedStats: 試した回数・今週の分・週ごとの累計・最近試したこと', () => {
+  const iso = (...a) => at(...a).toISOString();
+  const ms = [
+    { id: 'a', result: 'loss', createdAt: iso(2026, 11, 3, 20) },
+    { id: 'b', result: 'win', createdAt: iso(2026, 11, 18, 20) },
+    { id: 'c', result: 'loss', createdAt: iso(2026, 11, 19, 20) },
+  ];
+  const reviews = new Map([
+    ['a', { matchId: 'a', improvement: '高台を先に取る', tried: [iso(2026, 11, 3, 21), iso(2026, 11, 4, 21)] }],
+    ['b', { matchId: 'b', nextMove: 'ULTを溜めたら声をかける', tried: [iso(2026, 11, 18, 21)] }],
+    ['c', { matchId: 'c', improvement: ' 高台を先に取る ', tried: [iso(2026, 11, 20, 21)] }],
+  ]);
+  const s = triedStats(ms, reviews, at(2026, 11, 21, 12));
+  assert.equal(s.total, 4);
+  assert.equal(s.thisWeek, 2);
+  // 11/2 の週から今週(11/16)まで。試さなかった 11/9 の週は平ら
+  assert.deepEqual(s.weeks, [
+    { start: '2026-11-02', total: 2 }, { start: '2026-11-09', total: 2 }, { start: '2026-11-16', total: 4 },
+  ]);
+  // 同じ文は1件にまとめ、新しい順
+  assert.deepEqual(s.recent.map((t) => t.text), ['高台を先に取る', 'ULTを溜めたら声をかける']);
+  assert.deepEqual(triedStats(ms, new Map(), at(2026, 11, 21, 12)), { total: 0, thisWeek: 0, weeks: [], recent: [] });
 });
 
 test('マスター: Reaper は Flex DPS、Hanzo は Main DPS(ユーザー指定)', async () => {
@@ -303,7 +328,7 @@ test('問いの順番: 気持ち → 結果 → マッチの質 → マップ �
 });
 
 const emptyAsk = () => ({
-  answers: { memo: '', result: null, skillGap: null, mapId: null, heroId: null }, step: 'memo', matchId: null, text: '',
+  answers: { memo: '', result: null, skillGap: null, mapId: null, heroId: null, otherHeroIds: [] }, step: 'memo', matchId: null, text: '',
 });
 const heroById = new Map([['rein', { id: 'rein', role: 'tank' }], ['ana', { id: 'ana', role: 'support' }]]);
 const ctx = (over = {}) => ({
@@ -317,7 +342,7 @@ test('下書き: 何も入力していなければ保存しない(消す)', () =
 });
 
 test('下書き: 保存して戻すと、答えといまの問い、打ちかけの文がそのまま戻る', () => {
-  const ask = { answers: { memo: 'メモ', result: 'loss', skillGap: 'even', mapId: 'dorado', heroId: null }, step: 'hero', matchId: null, text: 'rei' };
+  const ask = { answers: { memo: 'メモ', result: 'loss', skillGap: 'even', mapId: 'dorado', heroId: null, otherHeroIds: [] }, step: 'hero', matchId: null, text: 'rei' };
   const back = restoreDraft(JSON.stringify(buildDraft(ask, at(2026, 10, 19, 21))), ctx());
   assert.deepEqual(back, ask);
 });
@@ -343,6 +368,33 @@ test('下書き: 24時間より古い、壊れている、以前の形式、マ�
   // 戻せるものが何もなければ null
   const onlyHero = JSON.stringify(buildDraft({ ...emptyAsk(), answers: { ...emptyAsk().answers, heroId: 'rein' } }, at(2026, 10, 19, 21)));
   assert.equal(restoreDraft(onlyHero, ctx({ heroById: new Map() })), null);
+});
+
+test('下書き: 2人目からのヒーローも戻す。マスターにないヒーローは外し、1人目がなければ戻さない', () => {
+  const ask = { ...emptyAsk(), answers: { ...emptyAsk().answers, mapId: 'dorado', heroId: 'rein', otherHeroIds: ['ana', 'gone'] }, step: 'hero' };
+  const text = JSON.stringify(buildDraft(ask, at(2026, 10, 19, 21)));
+  assert.deepEqual(restoreDraft(text, ctx()).answers.otherHeroIds, ['ana']);
+  assert.deepEqual(restoreDraft(text, ctx({ heroById: new Map([['ana', {}]]) })).answers.otherHeroIds, []);
+});
+
+test('splitHeroInput: 空白で区切った複数のヒーローに分け、最後の語は打ちかけとして返す', () => {
+  const heroes = [
+    { id: 'tracer', name: 'Tracer', yomi: 'とれーさー' }, { id: 'genji', name: 'Genji', yomi: 'げんじ' },
+    { id: 'junker-queen', name: 'Junker Queen', yomi: 'じゃんかーくいーん' }, { id: 'soldier-76', name: 'Soldier: 76', yomi: 'そるじゃー' },
+  ];
+  const s = (t) => splitHeroInput(heroes, t);
+  assert.deepEqual(s('tracer gen'), { ids: ['tracer'], head: 'tracer', query: 'gen' });
+  assert.deepEqual(s('tracer '), { ids: ['tracer'], head: 'tracer', query: '' });
+  assert.deepEqual(s('とれーさー げんじ'), { ids: ['tracer'], head: 'とれーさー', query: 'げんじ' });
+  // 名前に空白を含むヒーローは、つなげて1人にする(打ちかけの語でも)
+  assert.deepEqual(s('junker queen tracer').ids, ['junker-queen']);
+  assert.deepEqual(s('tracer junker qu'), { ids: ['tracer'], head: 'tracer', query: 'junker qu' });
+  assert.deepEqual(s('soldier 76 genji').ids, ['soldier-76']);
+  // 「Tracer, Genji」(答えの表示)や「→」・読点でも区切る。一致しない語と重複は捨てる
+  assert.deepEqual(s('Tracer, Genji ').ids, ['tracer', 'genji']);
+  assert.deepEqual(s('Tracer → Genji ').ids, ['tracer', 'genji']);
+  assert.deepEqual(s('tracer、xxx tracer genji').ids, ['tracer']);
+  assert.deepEqual(s('gen'), { ids: [], head: '', query: 'gen' });
 });
 
 test('下書き: 保存した後は、その試合が残っているときだけ、振り返りの問いに戻す', () => {
@@ -372,9 +424,10 @@ test('引き分け: 勝率は 勝ち÷(勝ち+負け) で、試合数には含�
     match('d2', at(2026, 10, 21, 20, 30), 'tank', 'draw'),
     match('d3', at(2026, 10, 21, 21, 0), 'tank', 'loss'),
   ];
-  const [peak] = timeTagStats(ms).peak;
-  assert.deepEqual([peak.wins, peak.losses, peak.draws, peak.total, peak.rate], [1, 1, 1, 3, 0.5]);
-  assert.equal(timeTagStats([ms[1]]).peak[0].rate, null);
+  // 3試合とも10試合未満の区分なので、経過時間の1つの区分にまとまる
+  const [row] = sessionElapsedStats(ms);
+  assert.deepEqual([row.wins, row.losses, row.draws, row.total, row.rate], [1, 1, 1, 3, 0.5]);
+  assert.equal(sessionElapsedStats([ms[1]])[0].rate, null);
 });
 
 test('引き分け: 改善点記入率の対象にしない。バックアップで読み込める', () => {
