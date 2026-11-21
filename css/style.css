@@ -719,10 +719,10 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: var(--fs-sm); 
 }
 /* 大きな画面では、文字・ボタン・余白・本体の幅を同じ倍率で拡大する(1920×1080 で小さく感じたため。設計書 画面設計) */
 @media (min-width: 1440px) { body { zoom: 1.125; } }
-@media (min-width: 1800px) { body { zoom: 1.25; } }
+@media (min-width: 1800px) { body { zoom: 1.4; } }
 /* 拡大した分だけ、ダイアログの高さの上限を縮める(100vh のままだと画面より高くなり、見出しが上に切れる) */
 @media (min-width: 1440px) { dialog { max-height: calc((100vh - 32px) / 1.125); } }
-@media (min-width: 1800px) { dialog { max-height: calc((100vh - 32px) / 1.25); } }
+@media (min-width: 1800px) { dialog { max-height: calc((100vh - 32px) / 1.4); } }
 
 /* 集計: 数字のカード2枚(設計書 F5)。押すと下に詳しい中身を1つだけ開き、開いたカードに枠を付ける */
 .stat-cards { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3); margin: var(--s4) 0; }
