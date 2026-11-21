@@ -499,6 +499,9 @@ textarea.ask-input, textarea.ask-input:focus, textarea.ask-input:focus-visible {
 /* マップ・ヒーロー一覧への控えめなリンク(設計書 F1・F2) */
 .ask-browse { margin: 0; font-size: var(--fs-sm); }
 .ask-browse[hidden] { display: none; }
+/* map・hero を打つ途中に出す「一覧を開く」候補。マップ・ヒーローの候補と見分けられるよう破線にする */
+.opt-cmd { border-style: dashed; color: var(--muted); }
+.opt-cmd[aria-selected="true"] { color: var(--accent); }
 /* 一覧オーバーレイ(設計書 F1・F2) */
 .browse-layer {
   position: fixed; inset: 0; z-index: 110;
@@ -549,6 +552,9 @@ textarea.ask-input, textarea.ask-input:focus, textarea.ask-input:focus-visible {
   padding-top: var(--s2); border-top: 1px solid var(--border);
   font-size: var(--fs-sm); color: var(--muted);
 }
+/* キーの説明は、まとまりの途中で折り返さない */
+.browse-keys { display: flex; flex-wrap: wrap; gap: 2px var(--s4); }
+.browse-keys > span { white-space: nowrap; }
 @media (max-width: 480px) {
   .browse-card { padding: var(--s4); }
   .browse-grid, .browse-grid.is-map { grid-template-columns: repeat(2, minmax(0, 1fr)); }

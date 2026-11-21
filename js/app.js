@@ -400,7 +400,23 @@ function askCandidates(def) {
   if (!q.trim()) return def.recent();
   const recent = def.items === state.master.heroes ? heroUsage(state.matches, state.slots).recent
     : def.items === state.master.maps ? recentMapIds(state.matches) : [];
-  return searchByName(def.items, q, recent).slice(0, 8);
+  const list = searchTyped(def.items, q, recent).slice(0, 8);
+  // map・hero を打つ途中なら、一覧を開く候補を最後に足す(設計書 F1・F2)
+  const cmd = q.trim().toLowerCase();
+  return def.browseKey && cmd && def.browseKey.startsWith(cmd)
+    ? [...list, { id: BROWSE_CMD, name: def.browseKey, label: def.browseOpenLabel }]
+    : list;
+}
+
+// 一覧を開く候補の id
+const BROWSE_CMD = ':browse';
+
+// 日本語入力で漢字に変換した後(「なんきょくはんとう」→「南極半島」)も、変換前のかなで探す(設計書 F1)
+const hasKanji = (s) => /[㐀-鿿々]/.test(s);
+function searchTyped(items, q, recent) {
+  const hits = searchByName(items, q, recent);
+  const kana = state.ui.kana?.step === state.ask.step ? state.ui.kana.text : '';
+  return !hits.length && kana && hasKanji(q) ? searchByName(items, kana, recent) : hits;
 }
 
 function resetAsk() {
@@ -576,7 +592,8 @@ async function askCommit({ byKey = false } = {}) {
   // 空欄の Enter は候補を決めない。打った文字があり候補が複数なら先頭を決める(結果だけは1つに絞れるまで決めない。設計書 F3)
   const list = askCandidates(def);
   const c = list[state.ui.sel] ?? (text && (def.firstSelected || list.length === 1) ? list[0] : null);
-  if (c) await setAnswer(id, c.id);
+  if (c?.id === BROWSE_CMD) openBrowse({ byInput: true });
+  else if (c) await setAnswer(id, c.id);
   else if (!text && has) await askNext();
   else if (!text && def.optional) await setAnswer(id, null);
 }
@@ -968,7 +985,7 @@ function renderAskKeys(def, has) {
 
 // 段階の問い(scale)で、打った文字に合う段の位置。合わなければ -1
 function scaleMatch(def, text) {
-  const hit = text.trim() ? searchByName(def.items, text, [])[0] : null;
+  const hit = text.trim() ? searchTyped(def.items, text, [])[0] : null;
   return hit ? def.items.indexOf(hit) : -1;
 }
 
@@ -983,7 +1000,9 @@ function renderAskOpts() {
   const def = stepDef(state.ask.step);
   const typed = (state.ui.typed ?? askInput().value).trim();
   const hasRecent = def.kind === 'pick' && def.recent().length > 0;
-  const opts = def.kind === 'pick' ? askCandidates(def).map((x) => ({ id: x.id, label: x.name, color: def.color(x) })) : [];
+  const opts = def.kind === 'pick'
+    ? askCandidates(def).map((x) => (x.id === BROWSE_CMD ? { id: x.id, label: [h('kbd', {}, x.name), ` ${x.label}`], cmd: true } : { id: x.id, label: x.name, color: def.color(x) }))
+    : [];
   if (state.ui.sel >= opts.length) state.ui.sel = opts.length ? 0 : -1;
   const box = $('#ask-opts');
   box.classList.toggle('gap-scale', !!def.scale);
@@ -993,9 +1012,9 @@ function renderAskOpts() {
   fill(box, def.scale ? scaleEnds() : null,
   showRecent ? h('li', { class: 'opt-recent', role: 'presentation' }, '最近:') : null,
   opts.map((o, n) => h('li', {
-    class: 'opt', role: 'option', id: `ask-opt-${n}`, 'aria-selected': String(n === state.ui.sel),
+    class: o.cmd ? 'opt opt-cmd' : 'opt', role: 'option', id: `ask-opt-${n}`, 'aria-selected': String(n === state.ui.sel),
     onmousedown: (e) => { e.preventDefault(); state.ui.sel = n; state.timer.clicks += 1; askCommit(); },
-  }, o.color ? h('span', { class: 'dot', style: `background: ${o.color}` }) : null, o.label)),
+  }, o.color ? h('span', { class: 'dot', style: `background: ${o.color}` }) : null, ...[].concat(o.label))),
   def.kind === 'pick' && !opts.length && typed ? h('li', { class: 'opt-empty' }, '一致する候補がありません') : null,
   def.scale && typed && state.ui.sel < 0 ? h('li', { class: 'opt-empty scale-none' }, '一致する候補がありません') : null);
   const browseEl = $('#ask-browse');
@@ -1004,7 +1023,9 @@ function renderAskOpts() {
   fill(browseEl, showBrowse ? h('button', {
     type: 'button', class: 'link',
     onclick: () => { state.timer.clicks += 1; openBrowse(); },
-  }, def.browseOpenLabel) : null);
+  }, def.browseOpenLabel) : null,
+  // 一覧を開くキーと map・hero の入力があることを伝える(タッチ端末では出さない)
+  showBrowse && !isTouch() ? h('span', { class: 'muted browse-how' }, ' ', h('kbd', {}, '/'), ' か ', h('kbd', {}, def.browseKey), ' と打っても開けます') : null);
   askInput().setAttribute('aria-activedescendant', state.ui.sel >= 0 ? `ask-opt-${state.ui.sel}` : '');
   // 「次へ」の文言: 文は 次へ/とばす、候補と段階は 決める/そのまま
   const empty = !askInput().value.trim();
@@ -1073,7 +1094,10 @@ function renderBrowse() {
   }, h('span', { class: 'dot', style: `background: ${def.color(item)}` }), item.name)));
   const k = (t) => h('kbd', {}, t);
   fill($('#browse-foot'),
-    h('span', {}, k('←'), ' ', k('→'), ` ${def.browseSwitchLabel}　`, k('↑'), ' ', k('↓'), ' 選択　', k('Enter'), ' 決定'),
+    h('span', { class: 'browse-keys' },
+      h('span', {}, k('Tab'), ' ', k('Shift'), '+', k('Tab'), ` ${def.browseSwitchLabel}`),
+      h('span', {}, k('←'), k('↑'), k('↓'), k('→'), ' / ', k('h'), k('j'), k('k'), k('l'), ' 選択'),
+      h('span', {}, k('Enter'), ' 決定')),
     h('span', {}, k('Esc'), ' で戻る'));
 }
 
@@ -1089,6 +1113,16 @@ function moveBrowseGrid(deltaY) {
   else state.ui.browseSel = (cur + deltaY + len) % len;
   renderBrowse();
   grid.children[state.ui.browseSel]?.scrollIntoView({ block: 'nearest' });
+}
+
+// 左右: 隣の項目へ。端では反対の端へ回る
+function moveBrowseX(deltaX) {
+  const ctx = browseContext();
+  if (!ctx || !ctx.group.items.length) return;
+  const len = ctx.group.items.length;
+  state.ui.browseSel = (Math.max(0, state.ui.browseSel) + deltaX + len) % len;
+  renderBrowse();
+  $('#browse-grid').children[state.ui.browseSel]?.scrollIntoView({ block: 'nearest' });
 }
 
 async function commitBrowseItem(item) {
@@ -1120,6 +1154,8 @@ function bindAsk() {
     const def = stepDef(state.ask.step);
     // 打ち直したら、Tab で変換する前の文字ではなく、いまの文字で絞る
     state.ui.typed = null;
+    // 漢字に変換する前に打ったかなを覚えておく(searchTyped)
+    if (!hasKanji(input.value)) state.ui.kana = /[ぁ-ゖァ-ヺ]/.test(input.value) ? { step: state.ask.step, text: input.value } : null;
     if (def.browseKey && input.value.trim().toLowerCase() === def.browseKey) {
       renderAskOpts();
       openBrowse({ byInput: true });
@@ -1138,6 +1174,8 @@ function bindAsk() {
     const def = stepDef(state.ask.step);
     // 日本語の変換中(確定の Enter を含む)は何もしない
     if (e.isComposing || e.keyCode === 229 || e.altKey || e.metaKey) return;
+    // 一覧オーバーレイを開いている間のキーは、オーバーレイ側(bindKeyboard)だけで扱う
+    if (!$('#browse-overlay').hidden) return;
     if (e.ctrlKey) {
       if ((e.code === 'Space' || e.key === ' ') && def.groups) {
         e.preventDefault();
@@ -1186,6 +1224,16 @@ function bindAsk() {
       const cur = state.ui.typed !== null ? list.findIndex((x) => x.name === input.value) : -1;
       state.ui.typed ??= input.value;
       state.ui.sel = cur >= 0 ? (cur + 1) % list.length : Math.max(state.ui.sel, 0);
+      // 一覧を開く候補に変換したら、map・hero と打ったときと同じく一覧を開く
+      if (list[state.ui.sel].id === BROWSE_CMD) {
+        input.value = list[state.ui.sel].name;
+        state.ui.typed = null;
+        renderAskOpts();
+        openBrowse({ byInput: true });
+        // 開いた一覧で、同じ Tab をタブの切り替えとして扱わせない
+        e.stopPropagation();
+        return;
+      }
       input.value = list[state.ui.sel].name;
       renderAskOpts();
       queueDraft();
@@ -1201,6 +1249,8 @@ function bindAsk() {
     if (e.key === 'Enter' && !(def.kind === 'text' && e.shiftKey)) {
       e.preventDefault();
       askCommit({ byKey: true });
+      // 一覧を開く候補を決めたときは、開いた一覧で同じ Enter を項目の決定として扱わせない
+      if (!$('#browse-overlay').hidden) e.stopPropagation();
     }
   });
 
@@ -1380,18 +1430,23 @@ function bindKeyboard() {
       }
       const ctx = browseContext();
       if (!ctx) return;
-      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      // Tab / Shift+Tab でタブ(モード・ロール)を切り替える
+      if (e.key === 'Tab' && !e.ctrlKey && !e.altKey && !e.metaKey) {
         e.preventDefault();
         const i = ctx.groups.indexOf(ctx.group);
-        const dir = e.key === 'ArrowRight' ? 1 : -1;
+        const dir = e.shiftKey ? -1 : 1;
         state.ui.browseGroup = ctx.groups[(i + dir + ctx.groups.length) % ctx.groups.length].id;
         state.ui.browseSel = 0;
         renderBrowse();
         return;
       }
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      // 矢印キーと h・j・k・l でグリッドの中を動く(一覧を開いている間は文字を打たないため、文字と競合しない)
+      const move = e.ctrlKey || e.altKey || e.metaKey ? null
+        : { ArrowLeft: [-1, 0], h: [-1, 0], ArrowRight: [1, 0], l: [1, 0], ArrowUp: [0, -1], k: [0, -1], ArrowDown: [0, 1], j: [0, 1] }[e.key];
+      if (move) {
         e.preventDefault();
-        moveBrowseGrid(e.key === 'ArrowDown' ? 1 : -1);
+        if (move[0]) moveBrowseX(move[0]);
+        else moveBrowseGrid(move[1]);
         return;
       }
       if (e.key === 'Enter') {
@@ -2092,7 +2147,8 @@ function renderStats() {
     h('p', { class: 'stat-sub' }, slotIcon(icon, 14), title),
     rows.map((s) => {
       const id = `stat-bar-${s.key}`;
-      const record = `${s.draws ? '勝-敗-分' : '勝-敗'} ${winLossText(s)}`;
+      // 経過時間のグラフと同じ「2勝0敗」の形にする(「勝-敗 2-0」は記号が並んで読みづらいため)
+      const record = `${s.wins}勝${s.losses}敗${s.draws ? `${s.draws}分` : ''}`;
       return h('div', { class: 'bar-row' },
         h('span', { class: 'bar-label' }, slotIcon(s.key, 16), labels[s.key], ' ', s.total ? refTag(s.total) : null),
         h('span', { class: 'hint bar-hint' },
