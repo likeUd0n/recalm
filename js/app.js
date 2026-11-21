@@ -299,9 +299,31 @@ const fieldOf = (id, result) => {
 };
 // 選んだヒーローを打った順に。heroId が1人目、otherHeroIds が2人目から(設計書 F2)
 const askHeroIds = () => (state.ask.answers.heroId ? [state.ask.answers.heroId, ...(state.ask.answers.otherHeroIds ?? [])] : []);
-// ヒーローの問いの入力を、決まったヒーローと打ちかけの語に分ける(ヒーローの問い以外では null)
-const heroInput = (text) => (state.ask.step === 'hero'
-  ? splitHeroInput(state.master.heroes, text, heroUsage(state.matches, state.slots).recent) : null);
+// ヒーローの問いの入力を、決まったヒーローと打ちかけの語に分ける(ヒーローの問い以外では null)。
+// 2人目からは1人目と同じロールだけを選べる(2026-11-21 ユーザー指定)。違うロールのヒーローは blocked に分ける
+function heroInput(text) {
+  if (state.ask.step !== 'hero') return null;
+  const p = splitHeroInput(state.master.heroes, text, heroUsage(state.matches, state.slots).recent);
+  const role = state.heroById.get(p.ids[0])?.role ?? null;
+  const ids = p.ids.filter((id) => state.heroById.get(id)?.role === role);
+  return { ...p, ids, role, blocked: p.ids.filter((id) => !ids.includes(id)) };
+}
+const heroLock = () => heroInput(state.ui.typed ?? askInput().value)?.role ?? null;
+// 違うロールのヒーローを打ったときの説明。打ちかけの語が、同じロールのどの候補よりも先に違うロールのヒーローに一致するときも出す
+// (「tra」で Tracer より後の Ramattra だけが残り、Tracer が消えた理由が分からなくならないように)
+function heroRoleBlock() {
+  const hi = heroInput(state.ui.typed ?? askInput().value);
+  if (!hi?.role) return null;
+  let names = hi.blocked;
+  if (!names.length && hi.query) {
+    const hits = searchTyped(state.master.heroes, hi.query, []);
+    const firstOk = hits.findIndex((x) => x.role === hi.role);
+    names = hits.slice(0, firstOk < 0 ? hits.length : firstOk).map((x) => x.id).slice(0, 3);
+  }
+  if (!names.length) return null;
+  const label = ROLES.find((r) => r.id === hi.role)?.label ?? '';
+  return `${names.map(heroName).join('・')} は ${label} ではないため選べません。1人目が ${heroName(hi.ids[0])} なので、${label} のヒーローだけ選べます`;
+}
 // 候補 id を、入力欄で先に決めたヒーローの後ろに足す
 const withHeadHeroes = (id) => [...new Set([...(heroInput(state.ui.typed ?? askInput().value)?.ids ?? []), id])];
 
@@ -360,7 +382,8 @@ function stepDef(id) {
         name: r.label,
         color: `var(--role-${r.id})`,
         items: state.master.heroes.filter((x) => x.role === r.id).sort((a, b) => a.name.localeCompare(b.name, 'en')),
-      })).filter((g) => g.items.length),
+      // 入力欄で1人目を決めていたら、一覧もそのロールだけにする
+      })).filter((g) => g.items.length && (!heroLock() || g.id === heroLock())),
       color: (x) => `var(--role-${x.role})`, firstSelected: true,
     };
   }
@@ -407,7 +430,8 @@ function askCandidates(def) {
   const hi = heroInput(typed);
   const q = hi ? hi.query : typed;
   if (hi?.ids.length) {
-    const rest = (xs) => xs.filter((x) => !hi.ids.includes(x.id));
+    // 2人目からは1人目と同じロールのヒーローだけを出す
+    const rest = (xs) => xs.filter((x) => x.id === BROWSE_CMD || (!hi.ids.includes(x.id) && x.role === hi.role));
     return q ? rest(askCandidatesFor(def, q)) : rest(def.recent());
   }
   if (!q.trim()) return def.recent();
@@ -418,12 +442,17 @@ function askCandidatesFor(def, q) {
   const recent = def.items === state.master.heroes ? heroUsage(state.matches, state.slots).recent
     : def.items === state.master.maps ? recentMapIds(state.matches) : [];
   const list = searchTyped(def.items, q, recent).slice(0, 8);
-  // map・hero を打つ途中なら、一覧を開く候補を最後に足す(設計書 F1・F2)
-  const cmd = q.trim().toLowerCase();
-  return def.browseKey && cmd && def.browseKey.startsWith(cmd)
+  // map・hero(まっぷ・ひーろー も)を打つ途中なら、一覧を開く候補を最後に足す(設計書 F1・F2)
+  const cmd = toHiragana(q.trim().toLowerCase());
+  return def.browseKey && cmd && browseKeys(def).some((k) => k.startsWith(cmd))
     ? [...list, { id: BROWSE_CMD, name: def.browseKey, label: def.browseOpenLabel }]
     : list;
 }
+
+// 一覧を開く入力: 英字の map・hero と、かなの まっぷ・ひーろー(カタカナはひらがなにそろえて比べる)
+const BROWSE_KANA = { map: 'まっぷ', hero: 'ひーろー' };
+const browseKeys = (def) => [def.browseKey, BROWSE_KANA[def.browseKey]].filter(Boolean);
+const toHiragana = (s) => s.replace(/[ァ-ヶ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60));
 
 // 一覧を開く候補の id
 const BROWSE_CMD = ':browse';
@@ -615,6 +644,8 @@ async function askCommit({ byKey = false } = {}) {
   const list = askCandidates(def);
   // ヒーローは打ちかけの語があるときだけ先頭を決める(「tracer 」の Enter で最近の候補を足さない)
   const hi = heroInput(state.ui.typed ?? askInput().value);
+  // 1人目と違うロールのヒーローを打っているあいだは決めない(候補の下に理由を出している)
+  if (hi?.blocked.length) return;
   const typing = hi ? !!hi.query : !!text;
   const c = list[state.ui.sel] ?? (typing && (def.firstSelected || list.length === 1) ? list[0] : null);
   if (c?.id === BROWSE_CMD) openBrowse({ byInput: true });
@@ -1039,6 +1070,7 @@ function renderAskOpts() {
   const showRecent = def.kind === 'pick' && !!def.groups && !typed && hasRecent;
   // 空白で区切って先に決めたヒーローを、候補の前に「Tracer →」と出す(設計書 F2)
   const headIds = heroInput(state.ui.typed ?? askInput().value)?.ids ?? [];
+  const roleBlock = def.kind === 'pick' ? heroRoleBlock() : null;
   fill(box, def.scale ? scaleEnds() : null,
   showRecent ? h('li', { class: 'opt-recent', role: 'presentation' }, '最近:') : null,
   headIds.length ? h('li', { class: 'opt-recent', role: 'presentation' }, `${headIds.map(heroName).join(' → ')} →`) : null,
@@ -1046,7 +1078,8 @@ function renderAskOpts() {
     class: o.cmd ? 'opt opt-cmd' : 'opt', role: 'option', id: `ask-opt-${n}`, 'aria-selected': String(n === state.ui.sel),
     onmousedown: (e) => { e.preventDefault(); state.ui.sel = n; state.timer.clicks += 1; askCommit(); },
   }, o.color ? h('span', { class: 'dot', style: `background: ${o.color}` }) : null, ...[].concat(o.label))),
-  def.kind === 'pick' && !opts.length && typed ? h('li', { class: 'opt-empty' }, '一致する候補がありません') : null,
+  roleBlock ? h('li', { class: 'opt-empty opt-block', role: 'alert' }, roleBlock) : null,
+  def.kind === 'pick' && !opts.length && typed && !roleBlock ? h('li', { class: 'opt-empty' }, '一致する候補がありません') : null,
   def.scale && typed && state.ui.sel < 0 ? h('li', { class: 'opt-empty scale-none' }, '一致する候補がありません') : null);
   const browseEl = $('#ask-browse');
   const showBrowse = def.kind === 'pick' && !!def.groups && !typed;
@@ -1182,14 +1215,16 @@ function bindAsk() {
     if (!e.target.closest('button, a, textarea, .opt')) { e.preventDefault(); input.focus(); }
   });
 
-  input.addEventListener('input', () => {
+  input.addEventListener('input', (e) => {
     const def = stepDef(state.ask.step);
     // 打ち直したら、Tab で変換する前の文字ではなく、いまの文字で絞る
     state.ui.typed = null;
     // 漢字に変換する前に打ったかなを覚えておく(searchTyped)
     if (!hasKanji(input.value)) state.ui.kana = /[ぁ-ゖァ-ヺ]/.test(input.value) ? { step: state.ask.step, text: input.value } : null;
     // 「tracer hero」のように、ヒーローを打った後の hero でも開く
-    if (def.browseKey && (heroInput(input.value)?.query ?? input.value).trim().toLowerCase() === def.browseKey) {
+    // 日本語の変換中(まっぷ と打った途中)には開かない。確定の Enter が一覧の決定に回らないように
+    const word = toHiragana((heroInput(input.value)?.query ?? input.value).trim().toLowerCase());
+    if (def.browseKey && !e.isComposing && browseKeys(def).includes(word)) {
       renderAskOpts();
       openBrowse({ byInput: true });
       return;

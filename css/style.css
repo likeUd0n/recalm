@@ -478,6 +478,8 @@ textarea.ask-input, textarea.ask-input:focus, textarea.ask-input:focus-visible {
 }
 .opt[aria-selected="true"] { border-color: var(--accent); background: var(--accent-soft); font-weight: 700; }
 .opt-empty { color: var(--muted); font-size: var(--fs-sm); }
+/* 1人目と違うロールのヒーローを打ったときの説明(選べない理由を、候補の並びの下に1行で) */
+.opt-block { flex-basis: 100%; color: var(--warn); }
 /* マッチの質は、3つの候補を味方(左)→相手(右)の同じ幅の1列にし、上に向きの見出しを付ける。選んでいるあいだはほかを薄くする(設計書「簡易入力の設計」) */
 .ask-opts.gap-scale { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px var(--s2); }
 .gap-scale .scale-ends { grid-column: 1 / -1; display: flex; justify-content: space-between; font-size: var(--fs-sm); font-weight: 700; }
