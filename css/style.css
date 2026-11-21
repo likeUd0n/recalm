@@ -334,6 +334,8 @@ textarea { width: 100%; }
 .prev-imp-main h2 { margin: 0; font-size: var(--fs-sm); color: var(--text); font-weight: 700; white-space: nowrap; }
 .prev-imp-text { margin: 0; font-size: var(--fs-md); line-height: 1.6; white-space: pre-line; }
 .prev-imp-top a { font-size: var(--fs-sm); white-space: nowrap; }
+.prev-imp-tried { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--s3); font-size: var(--fs-sm); }
+.prev-imp-tried button.link[aria-pressed="true"] { color: var(--ok-text); text-decoration: none; font-weight: 700; }
 .prev-imp-from { margin: 0; font-size: var(--fs-sm); white-space: pre-line; }
 .prev-imp-sub { margin: 0; font-size: var(--fs-sm); }
 
@@ -722,9 +724,34 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: var(--fs-sm); 
 @media (min-width: 1440px) { dialog { max-height: calc((100vh - 32px) / 1.125); } }
 @media (min-width: 1800px) { dialog { max-height: calc((100vh - 32px) / 1.25); } }
 
-/* 集計・バックアップ */
-.stat-big { font-size: 40px; font-weight: 800; line-height: 1.1; margin: var(--s3) 0 var(--s1); font-variant-numeric: tabular-nums; }
-.stat-big .muted { font-size: var(--fs-md); font-weight: normal; }
+/* 集計: 数字のカード2枚(設計書 F5)。押すと下に詳しい中身を1つだけ開き、開いたカードに枠を付ける */
+.stat-cards { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3); margin: var(--s4) 0; }
+.stat-card {
+  display: grid; gap: 2px; align-content: start; text-align: left; font: inherit; color: var(--text);
+  background: var(--panel); border: 2px solid transparent; border-radius: var(--r-card); box-shadow: var(--shadow);
+  padding: var(--s4);
+}
+.stat-card:hover:not(:disabled) { border-color: var(--border); }
+.stat-card[aria-expanded="true"], .stat-card[aria-expanded="true"]:hover:not(:disabled) { border-color: var(--accent); }
+.card-label { font-size: var(--fs-sm); font-weight: 700; color: var(--muted); }
+.card-value { font-size: 32px; font-weight: 800; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.card-value small { font-size: var(--fs-md); font-weight: 700; margin-left: 2px; }
+.stat-card.main .card-value { color: var(--accent); }
+.card-sub { font-size: var(--fs-sm); color: var(--muted); }
+.spark { display: block; width: 100%; height: 26px; margin-top: var(--s1); overflow: visible; }
+.spark path { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.spark rect { fill: var(--accent); opacity: .55; }
+.spark rect.low { fill: var(--loss); }
+.stat-detail { margin-top: 0; }
+.stat-sub { font-size: var(--fs-md); margin: var(--s3) 0 var(--s1); }
+.tried-recent { list-style: none; margin: 0; padding: 0; display: grid; }
+.tried-recent li { display: flex; justify-content: space-between; gap: var(--s3); padding: var(--s1) 0; border-top: 1px solid var(--border); }
+.tried-recent li .muted { white-space: nowrap; font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+@media (max-width: 640px) {
+  .stat-cards { gap: var(--s2); }
+  .stat-card { padding: var(--s3); }
+  .card-value { font-size: 26px; }
+}
 /* 集計の見出し横の「?」: 説明文は太字にせず、見出しの左端から見出しの幅に収める(狭い画面ではみ出さない) */
 .panel h2:has(.hint) { position: relative; }
 .panel h2 .hint { position: static; }
@@ -743,6 +770,7 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: var(--fs-sm); 
   display: grid; gap: 6px; margin: var(--s3) 0 var(--s4);
   padding: var(--s3) var(--s4); border: 1px solid var(--accent); border-radius: var(--r-ctl); background: var(--panel);
 }
+.stats-few[hidden] { display: none; }
 .few-text { margin: 0; font-weight: 600; }
 .few-bar { height: 8px; border-radius: 999px; background: var(--panel-2); overflow: hidden; }
 .few-bar span { display: block; height: 100%; background: var(--accent); border-radius: 999px; }

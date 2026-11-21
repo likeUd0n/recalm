@@ -2,7 +2,7 @@
 import {
   TIME_SLOTS, PEAK_SLOT_IDS, ROLES, UNKNOWN_ROLE_LABEL, DAY_START_HOUR,
   BACKUP_STORES, BACKUP_STALE_DAYS, DEVICE_META_KEYS, REFERENCE_MIN_GAMES,
-  SKILL_GAPS, SKILL_GAP_ALIASES, DRAFT_MAX_AGE_HOURS, TRIAL_LOSS_GAMES,
+  SKILL_GAPS, SKILL_GAP_ALIASES, DRAFT_MAX_AGE_HOURS,
   SESSION_GAP_MINUTES, SESSION_ELAPSED_STEP_MINUTES,
 } from './config.js';
 
@@ -466,11 +466,57 @@ export function winRateHold(rows) {
   return hold;
 }
 
-// 成功の判定の試用の進み具合。負けた試合が TRIAL_LOSS_GAMES 試合たまるまでが試用(設計書「成功の判定」)。
-// 戻り値は { done: たまったか, remaining: あと何試合か }。
-export function trialProgress(lossCount) {
-  const remaining = Math.max(0, TRIAL_LOSS_GAMES - lossCount);
-  return { done: remaining === 0, remaining };
+// その日(YYYY-MM-DD)を含む週の月曜日を YYYY-MM-DD で返す(集計の「今週」と週ごとの積み上げ。設計書 F5)。
+export function weekStartKey(dayKey) {
+  const [y, m, d] = dayKey.split('-').map(Number);
+  const weekday = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+  return shiftDayKey(dayKey, -((weekday + 6) % 7));
+}
+
+// 前回の「次に試すこと」を、最後に保存した試合より後に「試した」と押しているか(設計書「簡易入力の設計」)。
+// 押していれば、その押した日時(ISO)を返す。なければ null。
+export function triedSinceLastMatch(tried, matches) {
+  const last = matches.reduce((a, m) => (m.createdAt > a ? m.createdAt : a), '');
+  return (tried ?? []).findLast((t) => t > last) ?? null;
+}
+
+// 「次に試したこと」の集計(設計書 F5)。reviews は Map<matchId, Review>、now は Date。
+// 戻り値: { total: 全期間の回数, thisWeek: 今週(月曜0:00から)の回数,
+//   weeks: 最初に押した週から今週までの [{ start: 週の月曜, total: その週までの累計 }],
+//   recent: 最近試したこと [{ text, at: 最後に押した日時 }] を新しい順に3件(同じ文は1件にまとめる) }
+export function triedStats(matches, reviews, now) {
+  const taps = [];
+  for (const m of matches) {
+    const r = reviews.get(m.id);
+    if (!r?.tried?.length) continue;
+    // その試合の次に試すこと: 負けは improvement、勝ち・引き分けは nextMove(latestNextMove と同じ)
+    const text = (m.result === 'loss' ? r.improvement : r.nextMove) ?? r.improvement ?? r.nextMove ?? '';
+    for (const at of r.tried) taps.push({ at, text: text.trim() });
+  }
+  taps.sort((a, b) => a.at.localeCompare(b.at));
+  const weekOf = (iso) => weekStartKey(dayKeyOf(new Date(iso)));
+  const thisWeekStart = weekStartKey(dayKeyOf(now));
+  const weeks = [];
+  if (taps.length) {
+    let count = 0;
+    let i = 0;
+    for (let w = weekOf(taps[0].at); w <= thisWeekStart; w = shiftDayKey(w, 7)) {
+      while (i < taps.length && weekOf(taps[i].at) <= w) { count += 1; i += 1; }
+      weeks.push({ start: w, total: count });
+    }
+  }
+  const recent = [];
+  for (const t of [...taps].reverse()) {
+    if (recent.length >= 3) break;
+    if (!t.text || recent.some((x) => x.text === t.text)) continue;
+    recent.push(t);
+  }
+  return {
+    total: taps.length,
+    thisWeek: taps.filter((t) => weekOf(t.at) === thisWeekStart).length,
+    weeks,
+    recent,
+  };
 }
 
 // 直近に選んだマップの id を新しい順に重複なしで返す。

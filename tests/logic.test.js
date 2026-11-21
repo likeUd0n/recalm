@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {
   dayKeyOf, normalizeMatch, matchesNeedingUpdate, runningTallies, dailyTally, tallyText,
   shiftDayKey, reviewRates, isPeakTime, isWeekendDay, matchTimeTags, timeSlotOf,
-  buildBackup, parseBackup, backupStatus, statsScope, sessionElapsedStats, winRateHold, splitHeroInput, trialProgress, askSteps, isAskEmpty, buildDraft, restoreDraft,
+  buildBackup, parseBackup, backupStatus, statsScope, sessionElapsedStats, winRateHold, splitHeroInput, weekStartKey, triedSinceLastMatch, triedStats, askSteps, isAskEmpty, buildDraft, restoreDraft,
   searchByName, roleRecords, reviewEntries, latestNextMove,
 } from '../js/logic.js';
 
@@ -211,11 +211,45 @@ test('winRateHold: 0分から続けて勝率50%以上だった区分の終わり
   assert.equal(winRateHold([]), null);
 });
 
-test('成功の判定の試用: 負けた試合が10試合たまるまでの残りを数える', () => {
-  assert.deepEqual(trialProgress(0), { done: false, remaining: 10 });
-  assert.deepEqual(trialProgress(7), { done: false, remaining: 3 });
-  assert.deepEqual(trialProgress(10), { done: true, remaining: 0 });
-  assert.deepEqual(trialProgress(12), { done: true, remaining: 0 });
+test('weekStartKey: その日を含む週の月曜日を返す', () => {
+  assert.equal(weekStartKey('2026-11-21'), '2026-11-16'); // 土曜
+  assert.equal(weekStartKey('2026-11-16'), '2026-11-16'); // 月曜
+  assert.equal(weekStartKey('2026-11-22'), '2026-11-16'); // 日曜
+  assert.equal(weekStartKey('2026-11-02'), '2026-11-02');
+});
+
+test('triedSinceLastMatch: 最後に保存した試合より後に押したものだけを返す', () => {
+  const ms = [{ createdAt: at(2026, 11, 21, 20).toISOString() }, { createdAt: at(2026, 11, 21, 21).toISOString() }];
+  const before = at(2026, 11, 21, 20, 30).toISOString();
+  const after = at(2026, 11, 21, 21, 10).toISOString();
+  assert.equal(triedSinceLastMatch([before], ms), null);
+  assert.equal(triedSinceLastMatch([before, after], ms), after);
+  assert.equal(triedSinceLastMatch(undefined, ms), null);
+  assert.equal(triedSinceLastMatch([after], []), after);
+});
+
+test('triedStats: 試した回数・今週の分・週ごとの累計・最近試したこと', () => {
+  const iso = (...a) => at(...a).toISOString();
+  const ms = [
+    { id: 'a', result: 'loss', createdAt: iso(2026, 11, 3, 20) },
+    { id: 'b', result: 'win', createdAt: iso(2026, 11, 18, 20) },
+    { id: 'c', result: 'loss', createdAt: iso(2026, 11, 19, 20) },
+  ];
+  const reviews = new Map([
+    ['a', { matchId: 'a', improvement: '高台を先に取る', tried: [iso(2026, 11, 3, 21), iso(2026, 11, 4, 21)] }],
+    ['b', { matchId: 'b', nextMove: 'ULTを溜めたら声をかける', tried: [iso(2026, 11, 18, 21)] }],
+    ['c', { matchId: 'c', improvement: ' 高台を先に取る ', tried: [iso(2026, 11, 20, 21)] }],
+  ]);
+  const s = triedStats(ms, reviews, at(2026, 11, 21, 12));
+  assert.equal(s.total, 4);
+  assert.equal(s.thisWeek, 2);
+  // 11/2 の週から今週(11/16)まで。試さなかった 11/9 の週は平ら
+  assert.deepEqual(s.weeks, [
+    { start: '2026-11-02', total: 2 }, { start: '2026-11-09', total: 2 }, { start: '2026-11-16', total: 4 },
+  ]);
+  // 同じ文は1件にまとめ、新しい順
+  assert.deepEqual(s.recent.map((t) => t.text), ['高台を先に取る', 'ULTを溜めたら声をかける']);
+  assert.deepEqual(triedStats(ms, new Map(), at(2026, 11, 21, 12)), { total: 0, thisWeek: 0, weeks: [], recent: [] });
 });
 
 test('マスター: Reaper は Flex DPS、Hanzo は Main DPS(ユーザー指定)', async () => {
