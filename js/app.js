@@ -11,7 +11,7 @@ import {
   dayKeyOf, jstParts, timeSlotOf, timeSlotRangeText, matchTimeTags, matchesNeedingUpdate, recentMapIds,
   heroUsage, orderByRecent, searchByName, LOSS_REVIEW_FIELDS, WIN_REVIEW_FIELDS, DRAW_REVIEW_FIELDS, LEGACY_REVIEW_FIELDS, ASK_BEFORE_SAVE, askSteps,
   dailyTally, runningTallies, tallyText, winLossText, tallyLabel, shiftDayKey, roleRecords, reviewEntries, latestNextMove,
-  buildBackup, parseBackup, backupStatus, timeTagStats, statsScope, sessionElapsedStats, trialProgress, reviewRates, isAskEmpty, buildDraft, restoreDraft,
+  buildBackup, parseBackup, backupStatus, timeTagStats, statsScope, sessionElapsedStats, winRateHold, splitHeroInput, trialProgress, reviewRates, isAskEmpty, buildDraft, restoreDraft,
 } from './logic.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -41,7 +41,7 @@ function hintParas(text) {
 // 問いかけ入力の状態(設計書「簡易入力の設計」)。answers は保存する前の答え、step はいまの問い、
 // matchId は保存した試合(保存前は null)、seen は保存する前に一度開いた問い(とばした任意の問いへ戻らないため)。
 const emptyAsk = () => ({
-  answers: { memo: '', result: null, skillGap: null, mapId: null, heroId: null },
+  answers: { memo: '', result: null, skillGap: null, mapId: null, heroId: null, otherHeroIds: [] },
   step: 'memo', matchId: null, seen: new Set(), reviewed: false,
 });
 
@@ -297,7 +297,13 @@ const fieldOf = (id, result) => {
   const byResult = { loss: LOSS_REVIEW_FIELDS, win: WIN_REVIEW_FIELDS, draw: DRAW_REVIEW_FIELDS }[result];
   return byResult?.find((f) => f.key === id) ?? REVIEW_FIELDS.find((f) => f.key === id);
 };
-const askHeroIds = () => (state.ask.answers.heroId ? [state.ask.answers.heroId] : []);
+// 選んだヒーローを打った順に。heroId が1人目、otherHeroIds が2人目から(設計書 F2)
+const askHeroIds = () => (state.ask.answers.heroId ? [state.ask.answers.heroId, ...(state.ask.answers.otherHeroIds ?? [])] : []);
+// ヒーローの問いの入力を、決まったヒーローと打ちかけの語に分ける(ヒーローの問い以外では null)
+const heroInput = (text) => (state.ask.step === 'hero'
+  ? splitHeroInput(state.master.heroes, text, heroUsage(state.matches, state.slots).recent) : null);
+// 候補 id を、入力欄で先に決めたヒーローの後ろに足す
+const withHeadHeroes = (id) => [...new Set([...(heroInput(state.ui.typed ?? askInput().value)?.ids ?? []), id])];
 
 // タッチ端末(カーソルを合わせられない)では、キーの説明の代わりに「押して選ぶ」と伝える(設計書「簡易入力の設計」)
 const isTouch = () => matchMedia('(hover: none)').matches;
@@ -344,7 +350,7 @@ function stepDef(id) {
   }
   if (id === 'hero') {
     return {
-      kind: 'pick', short: 'ヒーロー', q: '使ったヒーローは?', sub: `ロールはヒーローから決まります。答えると試合を保存します。${pickHow()}`,
+      kind: 'pick', short: 'ヒーロー', q: '使ったヒーローは?', sub: `ロールはヒーローから決まります。答えると試合を保存します。${pickHow()}\n2人以上は空白で区切って打てます(tracer genji)`,
       example: 'tracer', items: state.master.heroes,
       browseKey: 'hero', browseTitle: 'ヒーローを選ぶ', browseOpenLabel: 'ヒーロー一覧を開く', browseSwitchLabel: 'ロール切替',
       // 空欄のときは「最近」を出し、その下の固定位置のリンク・hero入力・/ / Ctrl+Space で一覧オーバーレイを開く(設計書 F2)
@@ -378,7 +384,7 @@ function answerLabel(id, v) {
   if (id === 'result') return RESULT_LABELS[v];
   if (id === 'skillGap') return skillGapLabel(v);
   if (id === 'map') return state.mapById.get(v)?.name ?? DELETED_LABELS.map;
-  if (id === 'hero') return heroName(v);
+  if (id === 'hero') return askHeroIds().map(heroName).join(' → ');
   return v;
 }
 function answerColor(id, v) {
@@ -395,9 +401,20 @@ const askInput = () => $('#ask-input');
 // 候補(pick の問い)。空のときは「最近」、打ったら名前か読みの一致するもの
 // Tab で候補の名前に変換した後も、変換前に打った文字(state.ui.typed)で絞ったままにする
 function askCandidates(def) {
-  const q = state.ui.typed ?? askInput().value;
+  const typed = state.ui.typed ?? askInput().value;
   if (def.scale) return def.items;
+  // ヒーローは空白で区切った最後の語で絞り、先に決めたヒーローは候補から外す(設計書 F2)
+  const hi = heroInput(typed);
+  const q = hi ? hi.query : typed;
+  if (hi?.ids.length) {
+    const rest = (xs) => xs.filter((x) => !hi.ids.includes(x.id));
+    return q ? rest(askCandidatesFor(def, q)) : rest(def.recent());
+  }
   if (!q.trim()) return def.recent();
+  return askCandidatesFor(def, q);
+}
+
+function askCandidatesFor(def, q) {
   const recent = def.items === state.master.heroes ? heroUsage(state.matches, state.slots).recent
     : def.items === state.master.maps ? recentMapIds(state.matches) : [];
   const list = searchTyped(def.items, q, recent).slice(0, 8);
@@ -563,8 +580,13 @@ async function setAnswer(id, value) {
         return;
       }
     }
+  } else if (id === 'hero') {
+    // ヒーローは打った順の配列でも受ける。1人目を heroId、2人目からを otherHeroIds に置く
+    const ids = [].concat(value ?? []);
+    state.ask.answers.heroId = ids[0] ?? null;
+    state.ask.answers.otherHeroIds = ids.slice(1);
   } else {
-    const key = { map: 'mapId', hero: 'heroId' }[id] ?? id;
+    const key = { map: 'mapId' }[id] ?? id;
     state.ask.answers[key] = value;
   }
   await askNext();
@@ -591,9 +613,14 @@ async function askCommit({ byKey = false } = {}) {
   }
   // 空欄の Enter は候補を決めない。打った文字があり候補が複数なら先頭を決める(結果だけは1つに絞れるまで決めない。設計書 F3)
   const list = askCandidates(def);
-  const c = list[state.ui.sel] ?? (text && (def.firstSelected || list.length === 1) ? list[0] : null);
+  // ヒーローは打ちかけの語があるときだけ先頭を決める(「tracer 」の Enter で最近の候補を足さない)
+  const hi = heroInput(state.ui.typed ?? askInput().value);
+  const typing = hi ? !!hi.query : !!text;
+  const c = list[state.ui.sel] ?? (typing && (def.firstSelected || list.length === 1) ? list[0] : null);
   if (c?.id === BROWSE_CMD) openBrowse({ byInput: true });
-  else if (c) await setAnswer(id, c.id);
+  else if (c) await setAnswer(id, hi ? withHeadHeroes(c.id) : c.id);
+  // 「tracer 」のように区切りで終えたら、決まったヒーローだけで決める
+  else if (hi?.ids.length && !hi.query) await setAnswer(id, hi.ids);
   else if (!text && has) await askNext();
   else if (!text && def.optional) await setAnswer(id, null);
 }
@@ -664,7 +691,8 @@ async function saveAskMatch() {
 
 async function saveAskMatchNow() {
   const a = state.ask.answers;
-  const hero = state.heroById.get(a.heroId);
+  const heroIds = askHeroIds().filter((x) => state.heroById.has(x));
+  const hero = state.heroById.get(heroIds[0]);
   if (!a.result || !a.skillGap || !a.mapId || !hero) return;
   const now = new Date();
   const startedAt = state.timer.startedAt ?? now.getTime();
@@ -673,7 +701,7 @@ async function saveAskMatchNow() {
     createdAt: now.toISOString(),
     date: dayKeyOf(now),
     timeSlot: timeSlotOf(now).id,
-    role: hero.role, // ロールは選んだヒーローのロール(設計書 F3)
+    role: hero.role, // ロールは1人目のヒーローのロール(設計書 F3。同じ試合でロールは混ざらない)
     mapId: a.mapId,
     result: a.result,
     skillGap: a.skillGap,
@@ -685,7 +713,7 @@ async function saveAskMatchNow() {
   try {
     await db.saveMatch({
       match,
-      ...childRows(match.id, { heroIds: [hero.id], banned: false, bans: new Map(), allyComp: null, enemyComp: null }),
+      ...childRows(match.id, { heroIds, banned: false, bans: new Map(), allyComp: null, enemyComp: null }),
       review: memo ? { matchId: match.id, memo, updatedAt: now.toISOString() } : null,
     });
   } catch (e) {
@@ -849,7 +877,7 @@ function renderPrevImprovement() {
   if (!entry) return;
   const m = entry.match;
   const map = m.mapId ? state.mapById.get(m.mapId) : null;
-  const heroId = selfHeroIds(m.id)[0] ?? null;
+  const prevHeroIds = selfHeroIds(m.id);
   // いつの試合か: 1分未満は「たった今」、60分未満は「N分前」、今日なら「今日 21:40」、それより前は「10月24日」
   const minutes = Math.floor((Date.now() - new Date(m.createdAt).getTime()) / 60000);
   const day = dayKeyOf(new Date(m.createdAt));
@@ -867,7 +895,7 @@ function renderPrevImprovement() {
   // メタ情報はピル枠や強い色を付けず、落ち着いた1行のテキストで並べる
   $('#prev-imp-meta').textContent = [
     `${ago}${fromKind ?? '試合'}より`,
-    heroId ? heroName(heroId) : null,
+    prevHeroIds.length ? reviewHero(prevHeroIds) : null,
     m.mapId ? (map?.name ?? DELETED_LABELS.map) : null,
     RESULT_LABELS[m.result],
     when,
@@ -1009,8 +1037,11 @@ function renderAskOpts() {
   // マッチの質は、選んでいるあいだほかの2つを薄く出す(設計書「簡易入力の設計」)
   box.classList.toggle('has-sel', !!def.scale && state.ui.sel >= 0);
   const showRecent = def.kind === 'pick' && !!def.groups && !typed && hasRecent;
+  // 空白で区切って先に決めたヒーローを、候補の前に「Tracer →」と出す(設計書 F2)
+  const headIds = heroInput(state.ui.typed ?? askInput().value)?.ids ?? [];
   fill(box, def.scale ? scaleEnds() : null,
   showRecent ? h('li', { class: 'opt-recent', role: 'presentation' }, '最近:') : null,
+  headIds.length ? h('li', { class: 'opt-recent', role: 'presentation' }, `${headIds.map(heroName).join(' → ')} →`) : null,
   opts.map((o, n) => h('li', {
     class: o.cmd ? 'opt opt-cmd' : 'opt', role: 'option', id: `ask-opt-${n}`, 'aria-selected': String(n === state.ui.sel),
     onmousedown: (e) => { e.preventDefault(); state.ui.sel = n; state.timer.clicks += 1; askCommit(); },
@@ -1127,8 +1158,9 @@ function moveBrowseX(deltaX) {
 
 async function commitBrowseItem(item) {
   const step = state.ask.step;
+  const ids = step === 'hero' ? withHeadHeroes(item.id) : null;
   closeBrowse({ restoreFocus: false });
-  await setAnswer(step, item.id);
+  await setAnswer(step, ids ?? item.id);
 }
 
 // 文の長さに合わせて入力欄の高さを変える
@@ -1156,14 +1188,16 @@ function bindAsk() {
     state.ui.typed = null;
     // 漢字に変換する前に打ったかなを覚えておく(searchTyped)
     if (!hasKanji(input.value)) state.ui.kana = /[ぁ-ゖァ-ヺ]/.test(input.value) ? { step: state.ask.step, text: input.value } : null;
-    if (def.browseKey && input.value.trim().toLowerCase() === def.browseKey) {
+    // 「tracer hero」のように、ヒーローを打った後の hero でも開く
+    if (def.browseKey && (heroInput(input.value)?.query ?? input.value).trim().toLowerCase() === def.browseKey) {
       renderAskOpts();
       openBrowse({ byInput: true });
       return;
     }
     // 結果などは、候補が1つに絞れるまで選ばない(d だけでは DRAW と DEFEAT を決めない。設計書 F3)
     if (def.scale) state.ui.sel = scaleMatch(def, input.value);
-    else if (def.kind === 'pick') state.ui.sel = input.value.trim() && (def.firstSelected || askCandidates(def).length === 1) ? 0 : -1;
+    // ヒーローを空白で区切り終えたところ(「tracer 」)では、最近の候補を選ばない(Enter で決まったヒーローだけを決める)
+    else if (def.kind === 'pick') state.ui.sel = (heroInput(input.value)?.query ?? input.value).trim() && (def.firstSelected || askCandidates(def).length === 1) ? 0 : -1;
     renderAskOpts();
     renderTextCount($('#ask-count'), def.kind === 'text' ? input.value.length : 0);
     growAsk();
@@ -1221,12 +1255,15 @@ function bindAsk() {
       e.preventDefault();
       const list = askCandidates(def);
       if (!list.length) return;
-      const cur = state.ui.typed !== null ? list.findIndex((x) => x.name === input.value) : -1;
+      // ヒーローは、先に決めた語を残して最後の語だけを変換する(「tracer gen」→「tracer Genji」)
+      const head = heroInput(state.ui.typed ?? input.value)?.head;
+      const asText = (x) => (head ? `${head} ${x.name}` : x.name);
+      const cur = state.ui.typed !== null ? list.findIndex((x) => asText(x) === input.value) : -1;
       state.ui.typed ??= input.value;
       state.ui.sel = cur >= 0 ? (cur + 1) % list.length : Math.max(state.ui.sel, 0);
       // 一覧を開く候補に変換したら、map・hero と打ったときと同じく一覧を開く
       if (list[state.ui.sel].id === BROWSE_CMD) {
-        input.value = list[state.ui.sel].name;
+        input.value = asText(list[state.ui.sel]);
         state.ui.typed = null;
         renderAskOpts();
         openBrowse({ byInput: true });
@@ -1234,7 +1271,7 @@ function bindAsk() {
         e.stopPropagation();
         return;
       }
-      input.value = list[state.ui.sel].name;
+      input.value = asText(list[state.ui.sel]);
       renderAskOpts();
       queueDraft();
       return;
@@ -1480,7 +1517,8 @@ function selfHeroIds(matchId) {
 
 const heroName = (id) => state.heroById.get(id)?.name ?? DELETED_LABELS.hero;
 // 振り返りの問いに入れるヒーロー名(設計書 F6)。プレイしたヒーローがなければ「そのヒーロー」。
-const reviewHero = (heroIds) => (heroIds.length ? heroName(heroIds[0]) : 'そのヒーロー');
+// 2人以上なら1人目だけを出し、省いたと分かるよう「など」を付ける(2026-11-21 ユーザー指定)
+const reviewHero = (heroIds) => (heroIds.length ? `${heroName(heroIds[0])}${heroIds.length > 1 ? ' など' : ''}` : 'そのヒーロー');
 // 振り返り欄の見出し。補足の問いがあれば2行目に出す。
 const reviewLabel = (f, heroIds, attrs) => h('label', attrs, f.label(reviewHero(heroIds)), f.sub ? [h('br'), f.sub] : null);
 const roleName = (id) => ROLES.find((r) => r.id === id)?.label ?? '';
@@ -1571,8 +1609,9 @@ function renderReviewView() {
       ...roleName(t), ' ', ...score(t), h('span', { class: 'muted' }, `(${t.total}試合)`)))) : null);
 
   const entries = reviewEntries(state.matches, state.reviews);
-  const heroOf = (m) => selfHeroIds(m.id)[0] ?? null;
-  const heroIds = [...new Set(entries.map((e) => heroOf(e.match)).filter(Boolean))];
+  // 複数のヒーローを使った試合は、どのヒーローの絞り込みにも入れる(2026-11-21 ユーザー指定)
+  const heroesOf = (m) => selfHeroIds(m.id);
+  const heroIds = [...new Set(entries.flatMap((e) => heroesOf(e.match)))];
   if (state.ui.reviewHero !== 'all' && !heroIds.includes(state.ui.reviewHero)) state.ui.reviewHero = 'all';
   const chip = (key, value, label) => h('button', {
     type: 'button', 'aria-pressed': String(state.ui[key] === value),
@@ -1585,7 +1624,7 @@ function renderReviewView() {
     chip('reviewHero', 'all', 'All Heroes'), heroIds.map((id) => chip('reviewHero', id, heroName(id))));
 
   const shown = entries.filter((e) => (state.ui.reviewResult === 'all' || e.match.result === state.ui.reviewResult)
-    && (state.ui.reviewHero === 'all' || heroOf(e.match) === state.ui.reviewHero));
+    && (state.ui.reviewHero === 'all' || heroesOf(e.match).includes(state.ui.reviewHero)));
   const today = dayKeyOf(new Date());
   const labelOf = Object.fromEntries(REVIEW_FIELDS.map((f) => [f.key, f.short()]));
   let lastDay = null;
@@ -1595,14 +1634,15 @@ function renderReviewView() {
     const sep = day !== lastDay ? h('li', { class: 'review-day' }, `${mo}月${d}日${day === today ? '(今日)' : ''}`) : null;
     lastDay = day;
     const map = m.mapId ? state.mapById.get(m.mapId) : null;
-    const heroId = heroOf(m);
+    const mHeroIds = heroesOf(m);
+    const heroId = mHeroIds[0] ?? null;
     const hero = heroId ? state.heroById.get(heroId) : null;
     return [sep, h('li', { class: 'review-item' },
       h('div', { class: 'review-meta' },
         h('span', { class: `res ${m.result}` }, RESULT_LABELS[m.result]),
         h('span', { class: 'mc-time' }, formatTime(m.createdAt)),
         m.mapId ? h('span', { class: 'tag' }, map ? h('span', { class: 'dot', style: `background: var(--mc-${map.mode})` }) : null, map?.name ?? DELETED_LABELS.map) : null,
-        heroId ? h('span', { class: 'tag' }, hero ? roleIcon(hero.role, 14) : null, heroName(heroId)) : null),
+        heroId ? h('span', { class: 'tag' }, hero ? roleIcon(hero.role, 14) : null, mHeroIds.map(heroName).join(' → ')) : null),
       // 負けた試合・新しい1問形式は「次に試すこと」を大きく出す(過去の記録に旧項目がある試合は併せて表示)
       m.result === 'loss'
         ? [sub, main].filter(Boolean).flatMap((b) => [h('div', { class: 'review-key' }, labelOf[b.key]), h('div', { class: 'review-main' }, b.text)])
@@ -2133,10 +2173,15 @@ function renderStats() {
   const rates = [$('#stats-session-panel'), $('#stats-time-panel')];
   fewEl.after(...(state.display.stats === 'winrate' ? [...rates, ...habit] : [...habit, ...rates]));
   fill($('#stats-session-hint'), hintParas(
-    `点の高さが勝率です。50%を下回った点と線は青灰で示します。点を押すと、勝-敗と試合数が出ます。白抜きの点は試合数が${REFERENCE_MIN_GAMES}未満の参考値です。\n横軸は${SESSION_ELAPSED_STEP_MINUTES}分ごとで、${REFERENCE_MIN_GAMES}試合以上たまった区切りまで並べ、残りは最後の「〜」にまとめます。遊ぶ時間が長くなると、横軸も自動で伸びます。\n時間は、セッションの最初の記録からの経過時間です。最初の試合の長さは入らないため、実際に遊んだ時間より15〜20分ほど短く出ます。\n前の記録から${SESSION_GAP_MINUTES}分以上あいたら、新しいセッションとして0分から数えます。疲れのほかに、時間帯や相手の違いも混ざるため、集中力そのものとは言い切れません。`));
+    `点の高さが勝率です。50%を下回った点と線は青灰で示します。点を押すと、勝-敗と試合数が出ます。白抜きの点は試合数が${REFERENCE_MIN_GAMES}未満の参考値です。\n横軸は${SESSION_ELAPSED_STEP_MINUTES}分ごとで、${REFERENCE_MIN_GAMES}試合以上たまった区切りまで並べ、残りは最後の「〜」にまとめます。遊ぶ時間が長くなると、横軸も自動で伸びます。\n「やめどきの目安」は、0分から続けて勝率50%以上だった区切りの終わりです。${REFERENCE_MIN_GAMES}試合未満の区切りでは判定せず、最初の区切りで下回ったときは出しません。\n時間は、セッションの最初の記録からの経過時間です。最初の試合の長さは入らないため、実際に遊んだ時間より15〜20分ほど短く出ます。\n前の記録から${SESSION_GAP_MINUTES}分以上あいたら、新しいセッションとして0分から数えます。疲れのほかに、時間帯や相手の違いも混ざるため、集中力そのものとは言い切れません。`));
+  // やめどきの目安: 0分から続けて勝率50%以上だった区分の終わり。判定できなければ出さない(設計書 F5)
+  const sessionRows = sessionElapsedStats(matches);
+  const hold = winRateHold(sessionRows);
   fill($('#stats-session'),
     matches.length
-      ? sessionChart(sessionElapsedStats(matches))
+      ? [sessionChart(sessionRows),
+        hold && h('p', { class: 'muted small-note' },
+          `やめどきの目安: ${hold.toEnd ? `${hold.until}分〜の区切りまで勝率50%以上を保てています` : `${hold.until}分までは勝率50%以上を保てています`}`)]
       : h('p', { class: 'muted' }, 'まだ記録がありません。'));
 
   // 時間帯別: ピークタイム/オフピークと、土日/平日を別々に並べる(掛け合わせない)。勝-敗は棒の「?」と同じ仕組みで出す

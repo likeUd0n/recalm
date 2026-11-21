@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {
   dayKeyOf, normalizeMatch, matchesNeedingUpdate, runningTallies, dailyTally, tallyText,
   shiftDayKey, reviewRates, isPeakTime, isWeekendDay, matchTimeTags, timeSlotOf,
-  buildBackup, parseBackup, backupStatus, timeTagStats, statsScope, sessionElapsedStats, trialProgress, askSteps, isAskEmpty, buildDraft, restoreDraft,
+  buildBackup, parseBackup, backupStatus, timeTagStats, statsScope, sessionElapsedStats, winRateHold, splitHeroInput, trialProgress, askSteps, isAskEmpty, buildDraft, restoreDraft,
   searchByName, roleRecords, reviewEntries, latestNextMove,
 } from '../js/logic.js';
 
@@ -220,6 +220,20 @@ test('セッションの経過時間: 30分ごとに分け、10試合未満の�
   assert.deepEqual(sessionElapsedStats([{ id: 'x', createdAt: 'x', result: 'win' }]), []);
 });
 
+test('winRateHold: 0分から続けて勝率50%以上だった区分の終わりを返す', () => {
+  const r = (from, rate, total, last = false) => ({ from, rate, total, last, reference: total < 10 });
+  // 0〜30・30〜60 は50%以上、60〜90 で下回る → 60分まで
+  assert.deepEqual(winRateHold([r(0, 0.6, 10), r(30, 0.5, 12), r(60, 0.4, 10), r(90, 0.7, 3, true)]), { until: 60, toEnd: false });
+  // 参考値の区分で止まる
+  assert.deepEqual(winRateHold([r(0, 0.6, 10), r(30, 0.8, 4, true)]), { until: 30, toEnd: false });
+  // 最後の「N分〜」まで保てた
+  assert.deepEqual(winRateHold([r(0, 0.6, 10), r(30, 0.6, 10, true)]), { until: 30, toEnd: true });
+  // 最初の区分で止まれば出さない
+  assert.equal(winRateHold([r(0, 0.4, 10), r(30, 0.6, 10, true)]), null);
+  assert.equal(winRateHold([r(0, 0.9, 5, true)]), null);
+  assert.equal(winRateHold([]), null);
+});
+
 test('成功の判定の試用: 負けた試合が10試合たまるまでの残りを数える', () => {
   assert.deepEqual(trialProgress(0), { done: false, remaining: 10 });
   assert.deepEqual(trialProgress(7), { done: false, remaining: 3 });
@@ -303,7 +317,7 @@ test('問いの順番: 気持ち → 結果 → マッチの質 → マップ �
 });
 
 const emptyAsk = () => ({
-  answers: { memo: '', result: null, skillGap: null, mapId: null, heroId: null }, step: 'memo', matchId: null, text: '',
+  answers: { memo: '', result: null, skillGap: null, mapId: null, heroId: null, otherHeroIds: [] }, step: 'memo', matchId: null, text: '',
 });
 const heroById = new Map([['rein', { id: 'rein', role: 'tank' }], ['ana', { id: 'ana', role: 'support' }]]);
 const ctx = (over = {}) => ({
@@ -317,7 +331,7 @@ test('下書き: 何も入力していなければ保存しない(消す)', () =
 });
 
 test('下書き: 保存して戻すと、答えといまの問い、打ちかけの文がそのまま戻る', () => {
-  const ask = { answers: { memo: 'メモ', result: 'loss', skillGap: 'even', mapId: 'dorado', heroId: null }, step: 'hero', matchId: null, text: 'rei' };
+  const ask = { answers: { memo: 'メモ', result: 'loss', skillGap: 'even', mapId: 'dorado', heroId: null, otherHeroIds: [] }, step: 'hero', matchId: null, text: 'rei' };
   const back = restoreDraft(JSON.stringify(buildDraft(ask, at(2026, 10, 19, 21))), ctx());
   assert.deepEqual(back, ask);
 });
@@ -343,6 +357,32 @@ test('下書き: 24時間より古い、壊れている、以前の形式、マ�
   // 戻せるものが何もなければ null
   const onlyHero = JSON.stringify(buildDraft({ ...emptyAsk(), answers: { ...emptyAsk().answers, heroId: 'rein' } }, at(2026, 10, 19, 21)));
   assert.equal(restoreDraft(onlyHero, ctx({ heroById: new Map() })), null);
+});
+
+test('下書き: 2人目からのヒーローも戻す。マスターにないヒーローは外し、1人目がなければ戻さない', () => {
+  const ask = { ...emptyAsk(), answers: { ...emptyAsk().answers, mapId: 'dorado', heroId: 'rein', otherHeroIds: ['ana', 'gone'] }, step: 'hero' };
+  const text = JSON.stringify(buildDraft(ask, at(2026, 10, 19, 21)));
+  assert.deepEqual(restoreDraft(text, ctx()).answers.otherHeroIds, ['ana']);
+  assert.deepEqual(restoreDraft(text, ctx({ heroById: new Map([['ana', {}]]) })).answers.otherHeroIds, []);
+});
+
+test('splitHeroInput: 空白で区切った複数のヒーローに分け、最後の語は打ちかけとして返す', () => {
+  const heroes = [
+    { id: 'tracer', name: 'Tracer', yomi: 'とれーさー' }, { id: 'genji', name: 'Genji', yomi: 'げんじ' },
+    { id: 'junker-queen', name: 'Junker Queen', yomi: 'じゃんかーくいーん' }, { id: 'soldier-76', name: 'Soldier: 76', yomi: 'そるじゃー' },
+  ];
+  const s = (t) => splitHeroInput(heroes, t);
+  assert.deepEqual(s('tracer gen'), { ids: ['tracer'], head: 'tracer', query: 'gen' });
+  assert.deepEqual(s('tracer '), { ids: ['tracer'], head: 'tracer', query: '' });
+  assert.deepEqual(s('とれーさー げんじ'), { ids: ['tracer'], head: 'とれーさー', query: 'げんじ' });
+  // 名前に空白を含むヒーローは、つなげて1人にする(打ちかけの語でも)
+  assert.deepEqual(s('junker queen tracer').ids, ['junker-queen']);
+  assert.deepEqual(s('tracer junker qu'), { ids: ['tracer'], head: 'tracer', query: 'junker qu' });
+  assert.deepEqual(s('soldier 76 genji').ids, ['soldier-76']);
+  // 「Tracer → Genji」(答えの表示)や読点でも区切る。一致しない語と重複は捨てる
+  assert.deepEqual(s('Tracer → Genji ').ids, ['tracer', 'genji']);
+  assert.deepEqual(s('tracer、xxx tracer genji').ids, ['tracer']);
+  assert.deepEqual(s('gen'), { ids: [], head: '', query: 'gen' });
 });
 
 test('下書き: 保存した後は、その試合が残っているときだけ、振り返りの問いに戻す', () => {
