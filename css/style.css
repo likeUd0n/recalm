@@ -354,11 +354,7 @@ textarea { width: 100%; }
 
 /* ロールのアイコン(自作の図形) */
 .role-icon { display: block; flex: none; }
-/* 集計の表のアイコン */
-.stat-sub .slot-icon, .bar-label .slot-icon { vertical-align: -3px; margin-right: var(--s1); }
-.stat-sub .slot-icon { color: var(--muted); }
 .slot-peak { color: var(--q-good); } .slot-offpeak { color: var(--q-bad); }
-.slot-weekend { color: var(--accent); } .slot-weekday { color: var(--muted); }
 .role-icon.role-tank { color: var(--role-tank); }
 .role-icon.role-damage { color: var(--role-damage); }
 .role-icon.role-support { color: var(--role-support); }
@@ -733,8 +729,6 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: var(--fs-sm); 
 .panel h2:has(.hint) { position: relative; }
 .panel h2 .hint { position: static; }
 .panel h2 .hint-body { font-weight: normal; max-width: 100%; }
-/* 時間帯別の勝率の横棒(設計書 F5)。時間帯と曜日で縦列がそろうよう、列幅を固定する。白抜きの棒は参考値 */
-.stat-bars { margin: var(--s3) 0; }
 .stats-scope { font-size: var(--fs-sm); margin: var(--s4) 0 0; }
 .stats-today { font-size: var(--fs-sm); margin: var(--s1) 0 0; display: flex; flex-wrap: wrap; gap: var(--s1) var(--s3); align-items: baseline; font-variant-numeric: tabular-nums; }
 .stats-today .w { color: var(--win-text); font-weight: 700; }
@@ -753,23 +747,6 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: var(--fs-sm); 
 .few-bar { height: 8px; border-radius: 999px; background: var(--panel-2); overflow: hidden; }
 .few-bar span { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
 .few-count { font-size: var(--fs-sm); color: var(--muted); font-variant-numeric: tabular-nums; }
-.stat-sub { font-size: var(--fs-sm); color: var(--muted); margin: 0 0 var(--s1); }
-.bar-row {
-  display: grid; grid-template-columns: minmax(7.5em, 38%) 1fr 3.2em 4.2em; align-items: center; gap: var(--s2);
-  padding: var(--s2) 0; border-bottom: 1px solid rgba(128, 128, 128, .25); font-variant-numeric: tabular-nums;
-}
-.bar-label { display: flex; flex-wrap: wrap; align-items: center; gap: 2px var(--s1); }
-.bar-label .slot-icon { margin-right: 0; }
-.bar-hint { display: block; }
-.hint-btn.bar {
-  display: block; width: 100%; height: 14px; border-radius: 999px; overflow: hidden;
-  background: var(--panel-2); border: 1.5px solid transparent;
-}
-.hint-btn.bar.ref { border-color: var(--accent); background: var(--panel); }
-.bar-fill { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
-.hint-btn.bar.ref .bar-fill { background: var(--accent-soft); }
-.bar-rate { text-align: right; font-weight: 700; }
-.bar-games { text-align: right; font-size: var(--fs-sm); }
 /* セッション開始からの経過時間別の勝率の折れ線(設計書 F5)。白抜きの点は参考値、50%未満は青灰 */
 .chart-box { position: relative; }
 .session-chart { display: block; width: 100%; max-width: 560px; height: auto; margin: var(--s2) 0; }

@@ -110,7 +110,7 @@
 
   <dialog id="match-dialog" aria-labelledby="match-dialog-title"></dialog>
 
-  <!-- 集計(F5)。はじめは上から、成功の判定=負けた試合の次に試すことの記入率、気持ちの記入率、セッション開始からの経過時間別の勝率、時間帯別の勝率(設定の「集計の並び順」で勝率を先にできる。並べ替えは app.js)。勝率には必ず試合数を添える。注意書きは見出し横の「?」に入れる -->
+  <!-- 集計(F5)。はじめは上から、成功の判定=負けた試合の次に試すことの記入率、気持ちの記入率、セッション開始からの経過時間別の勝率(設定の「集計の並び順」で勝率を先にできる。並べ替えは app.js)。勝率には必ず試合数を添える。注意書きは見出し横の「?」に入れる -->
   <main id="view-stats" hidden>
     <p class="stats-scope muted" id="stats-scope" hidden></p>
     <p class="stats-today" id="stats-today" hidden></p>
@@ -123,15 +123,6 @@
         </span>
       </h2>
       <div id="stats-session"></div>
-    </section>
-    <section class="panel" id="stats-time-panel" aria-labelledby="stats-time-title">
-      <h2><span id="stats-time-title">時間帯別の勝率</span>
-        <span class="hint">
-          <button type="button" class="hint-btn" aria-describedby="stats-time-hint" aria-label="時間帯の判定と注意点">?</button>
-          <span role="tooltip" id="stats-time-hint" class="hint-body"></span>
-        </span>
-      </h2>
-      <div id="stats-time"></div>
     </section>
     <section class="panel" id="stats-impr-panel" aria-labelledby="stats-impr-title">
       <h2><span id="stats-impr-title">次に試すことを書けた割合(負けた試合)</span>

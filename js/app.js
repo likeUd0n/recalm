@@ -11,7 +11,7 @@ import {
   dayKeyOf, jstParts, timeSlotOf, timeSlotRangeText, matchTimeTags, matchesNeedingUpdate, recentMapIds,
   heroUsage, orderByRecent, searchByName, LOSS_REVIEW_FIELDS, WIN_REVIEW_FIELDS, DRAW_REVIEW_FIELDS, LEGACY_REVIEW_FIELDS, ASK_BEFORE_SAVE, askSteps,
   dailyTally, runningTallies, tallyText, winLossText, tallyLabel, shiftDayKey, roleRecords, reviewEntries, latestNextMove,
-  buildBackup, parseBackup, backupStatus, timeTagStats, statsScope, sessionElapsedStats, winRateHold, splitHeroInput, trialProgress, reviewRates, isAskEmpty, buildDraft, restoreDraft,
+  buildBackup, parseBackup, backupStatus, statsScope, sessionElapsedStats, winRateHold, splitHeroInput, trialProgress, reviewRates, isAskEmpty, buildDraft, restoreDraft,
 } from './logic.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -1396,15 +1396,12 @@ function gameIcon(id, size = 16) {
   }, ...shape());
 }
 
-// 時計・天秤・曜日のアイコン(自作の簡単な図形。設計書 F3)。stroke で描く線と、fill で塗る面を混ぜる。
+// 天秤のアイコン(自作の簡単な図形。設計書 F3)
 const line = { fill: 'none', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' };
 const SLOT_SHAPES = {
-  clock: () => [svg('circle', { cx: 12, cy: 12, r: 9, ...line }), svg('path', { d: 'M12 7v5l3 2', ...line })],
   // ピークタイム/オフピーク: マッチの質を表す天秤。水平=安定(ピークタイム)、傾き=不均等(オフピーク)
   peak: () => [svg('path', { d: 'M5 7h14M12 4v15M8 19h8M5 7l-2.5 6h5zM19 7l-2.5 6h5z', ...line })],
   offpeak: () => [svg('path', { d: 'M5 10 19 4M12 7v12M8 19h8M5 10l-2.5 6h5zM19 4l-2.5 6h5z', ...line })],
-  weekday: () => [svg('rect', { x: 3.5, y: 5, width: 17, height: 15.5, rx: 2.5, ...line }), svg('path', { d: 'M3.5 10h17M8 3v4M16 3v4', ...line })],
-  weekend: () => [svg('rect', { x: 3.5, y: 5, width: 17, height: 15.5, rx: 2.5, ...line }), svg('path', { d: 'M3.5 10h17M8 3v4M16 3v4', ...line }), svg('rect', { x: 12.5, y: 13, width: 4.5, height: 4, rx: 1, 'stroke-width': 0 })],
 };
 
 
@@ -2205,10 +2202,10 @@ function renderStats() {
     h('div', { class: 'few-bar', role: 'img', 'aria-label': `${REFERENCE_MIN_GAMES}試合中${got}試合` },
       h('span', { style: `width: ${(got / REFERENCE_MIN_GAMES) * 100}%` })),
     h('span', { class: 'few-count' }, `${got} / ${REFERENCE_MIN_GAMES}試合`));
-  // はじめは上から、次に試すことの記入率、気持ちの記入率、経過時間別の勝率、時間帯別の勝率。
-  // 設定の「集計の並び順」が「勝率を先に」なら、勝率の2つを先にする(設計書 F5)。注意書きは見出し横の「?」に入れる
+  // はじめは上から、次に試すことの記入率、気持ちの記入率、経過時間別の勝率。
+  // 設定の「集計の並び順」が「勝率を先に」なら、勝率を先にする(設計書 F5)。注意書きは見出し横の「?」に入れる
   const habit = [$('#stats-impr-panel'), $('#stats-feel-panel')];
-  const rates = [$('#stats-session-panel'), $('#stats-time-panel')];
+  const rates = [$('#stats-session-panel')];
   fewEl.after(...(state.display.stats === 'winrate' ? [...rates, ...habit] : [...habit, ...rates]));
   fill($('#stats-session-hint'), hintParas(
     `点の高さが勝率です。50%を下回った点と線は青灰で示します。点を押すと、勝-敗と試合数が出ます。白抜きの点は試合数が${REFERENCE_MIN_GAMES}未満の参考値です。\n横軸は${SESSION_ELAPSED_STEP_MINUTES}分ごとで、${REFERENCE_MIN_GAMES}試合以上たまった区切りまで並べ、残りは最後の「〜」にまとめます。遊ぶ時間が長くなると、横軸も自動で伸びます。\n「やめどきの目安」は、0分から続けて勝率50%以上だった区切りの終わりです。${REFERENCE_MIN_GAMES}試合未満の区切りでは判定せず、最初の区切りで下回ったときは出しません。\n時間は、セッションの最初の記録からの経過時間です。最初の試合の長さは入らないため、実際に遊んだ時間より15〜20分ほど短く出ます。\n前の記録から${SESSION_GAP_MINUTES}分以上あいたら、新しいセッションとして0分から数えます。疲れのほかに、時間帯や相手の違いも混ざるため、集中力そのものとは言い切れません。`));
@@ -2220,33 +2217,6 @@ function renderStats() {
       ? [sessionChart(sessionRows),
         hold && h('p', { class: 'muted small-note' },
           `やめどきの目安: ${hold.toEnd ? `${hold.until}分〜の区切りまで勝率50%以上を保てています` : `${hold.until}分までは勝率50%以上を保てています`}`)]
-      : h('p', { class: 'muted' }, 'まだ記録がありません。'));
-
-  // 時間帯別: ピークタイム/オフピークと、土日/平日を別々に並べる(掛け合わせない)。勝-敗は棒の「?」と同じ仕組みで出す
-  fill($('#stats-time-hint'), hintParas(
-    'ピークタイムは19:00〜24:00、土日は日付(0:00区切り)で判定します。\n疲労や対戦相手の違いは分離できないため、時間帯そのものの影響とは言い切れません。'));
-  const time = timeTagStats(matches);
-  const timeBars = (title, icon, rows, labels) => h('div', { class: 'stat-bars' },
-    h('p', { class: 'stat-sub' }, slotIcon(icon, 14), title),
-    rows.map((s) => {
-      const id = `stat-bar-${s.key}`;
-      // 経過時間のグラフと同じ「2勝0敗」の形にする(「勝-敗 2-0」は記号が並んで読みづらいため)
-      const record = `${s.wins}勝${s.losses}敗${s.draws ? `${s.draws}分` : ''}`;
-      return h('div', { class: 'bar-row' },
-        h('span', { class: 'bar-label' }, slotIcon(s.key, 16), labels[s.key], ' ', s.total ? refTag(s.total) : null),
-        h('span', { class: 'hint bar-hint' },
-          h('button', { type: 'button', class: s.reference ? 'hint-btn bar ref' : 'hint-btn bar', 'aria-describedby': id, 'aria-label': `${labels[s.key]}の勝-敗` },
-            s.rate === null ? null : h('span', { class: 'bar-fill', style: `width: ${Math.round(s.rate * 100)}%` })),
-          h('span', { role: 'tooltip', id, class: 'hint-body' }, hintParas(record))),
-        h('span', { class: 'bar-rate' }, percent(s.wins, s.wins + s.losses)),
-        h('span', { class: 'bar-games muted' }, `${s.total}試合`));
-    }));
-  fill($('#stats-time'),
-    matches.length
-      ? [
-        timeBars('時間帯', 'clock', time.peak, { peak: 'ピークタイム', offpeak: 'オフピーク' }),
-        timeBars('曜日', 'weekday', time.weekend, { weekend: '土日', weekday: '平日' }),
-      ]
       : h('p', { class: 'muted' }, 'まだ記録がありません。'));
 
   // 成功の判定: 負けた試合のうち、次に試すことを書けた割合(全試合で1つ。設計書「成功の判定」)。目標は常に出す

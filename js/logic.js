@@ -419,33 +419,11 @@ export function statsScope(matches) {
   return { total: times.length, from: jstParts(new Date(Math.min(...times))), to: jstParts(new Date(Math.max(...times))) };
 }
 
-// 時間帯別の勝敗(設計書「集計指標」)。入力時刻(createdAt)からタグを計算し、2つの区分を別々の表にする。
-// 戻り値は { peak: [ピークタイム, オフピーク], weekend: [土日, 平日] }。各行は { key, wins, losses, draws, total, rate, reference }。
-// 勝率は 勝ち÷(勝ち+負け) で、引き分けは入れない。試合数(total)には引き分けも含める。
-// 試合が0件の行も残す(rate は null)。入力時刻が読めない試合は数えない。
-export function timeTagStats(matches) {
-  const row = (key) => ({ key, wins: 0, losses: 0, draws: 0, total: 0 });
-  const rows = { peak: row('peak'), offpeak: row('offpeak'), weekend: row('weekend'), weekday: row('weekday') };
-  const add = (r, m) => {
-    countResult(r, m);
-    r.total += 1;
-  };
-  for (const m of matches) {
-    const d = new Date(m.createdAt);
-    if (Number.isNaN(d.getTime())) continue;
-    const tags = matchTimeTags(d);
-    add(tags.peak ? rows.peak : rows.offpeak, m);
-    add(tags.weekend ? rows.weekend : rows.weekday, m);
-  }
-  const done = (r) => ({ ...r, rate: r.wins + r.losses ? r.wins / (r.wins + r.losses) : null, reference: r.total < REFERENCE_MIN_GAMES });
-  return { peak: [done(rows.peak), done(rows.offpeak)], weekend: [done(rows.weekend), done(rows.weekday)] };
-}
-
 // セッション開始からの経過時間で分けた勝敗(設計書「集計指標」)。入力時刻の順に並べ、前の試合から
 // SESSION_GAP_MINUTES 分以上あいたら新しいセッションとし、その最初の試合からの経過時間を SESSION_ELAPSED_STEP_MINUTES 分ごとに分ける。
 // 試合数が REFERENCE_MIN_GAMES 未満の区分が出たら、その区分から後ろを1つにまとめる。後ろに試合がない区分もまとめた扱いにする。
 // 戻り値は行 { from, last, wins, losses, draws, total, rate, reference } の配列(from は区分の始まりの分。last の行は「from 分〜」)。
-// 記録がなければ空の配列。勝率と参考値は timeTagStats と同じ決まり。
+// 記録がなければ空の配列。勝率は 勝ち÷(勝ち+負け) で引き分けは入れず、試合数(total)には引き分けも含める。
 export function sessionElapsedStats(matches) {
   const timed = matches
     .map((m) => ({ m, t: new Date(m.createdAt).getTime() }))

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {
   dayKeyOf, normalizeMatch, matchesNeedingUpdate, runningTallies, dailyTally, tallyText,
   shiftDayKey, reviewRates, isPeakTime, isWeekendDay, matchTimeTags, timeSlotOf,
-  buildBackup, parseBackup, backupStatus, timeTagStats, statsScope, sessionElapsedStats, winRateHold, splitHeroInput, trialProgress, askSteps, isAskEmpty, buildDraft, restoreDraft,
+  buildBackup, parseBackup, backupStatus, statsScope, sessionElapsedStats, winRateHold, splitHeroInput, trialProgress, askSteps, isAskEmpty, buildDraft, restoreDraft,
   searchByName, roleRecords, reviewEntries, latestNextMove,
 } from '../js/logic.js';
 
@@ -166,29 +166,6 @@ test('土日の判定は日付(0:00区切り)で行う(2026-10-17 は土曜、10
   // 平日の夜はピークタイムで土日ではない。土曜の夜はピークタイムだが土日(質は不安定として扱う)。
   assert.deepEqual(matchTimeTags(at(2026, 10, 19, 21, 0)), { peak: true, weekend: false });
   assert.deepEqual(matchTimeTags(at(2026, 10, 17, 21, 0)), { peak: true, weekend: true });
-});
-
-test('時間帯別の勝敗: ピークタイム/オフピークと土日/平日は別々に数える(5試合の手計算)', () => {
-  const m = (id, d, result) => ({ id, createdAt: d.toISOString(), result });
-  const ms = [
-    m('1', at(2026, 10, 19, 21, 0), 'win'), // 月曜21:00 → ピーク・平日
-    m('2', at(2026, 10, 19, 21, 30), 'loss'), // 月曜21:30 → ピーク・平日
-    m('3', at(2026, 10, 19, 10, 0), 'win'), // 月曜10:00 → オフピーク・平日
-    m('4', at(2026, 10, 17, 21, 0), 'win'), // 土曜21:00 → ピーク・土日
-    m('5', at(2026, 10, 19, 2, 0), 'loss'), // 月曜2:00 → オフピーク・平日
-  ];
-  // ピーク: 1(勝)・2(負)・4(勝) → 2-1(3試合)。オフピーク: 3(勝)・5(負) → 1-1(2試合)。
-  // 土日: 4(勝) → 1-0(1試合)。平日: 1(勝)・2(負)・3(勝)・5(負) → 2-2(4試合)。どれも10試合未満なので参考値。
-  const s = timeTagStats(ms);
-  const pick = (rows) => rows.map((r) => [r.key, r.wins, r.losses, r.total, r.reference]);
-  assert.deepEqual(pick(s.peak), [['peak', 2, 1, 3, true], ['offpeak', 1, 1, 2, true]]);
-  assert.deepEqual(pick(s.weekend), [['weekend', 1, 0, 1, true], ['weekday', 2, 2, 4, true]]);
-  assert.equal(s.peak[0].rate, 2 / 3);
-  // 記録がなければ、どの行も0試合で勝率は null
-  const empty = timeTagStats([]);
-  assert.deepEqual(empty.peak.map((r) => [r.total, r.rate]), [[0, null], [0, null]]);
-  // 入力時刻が読めない試合は数えない
-  assert.equal(timeTagStats([{ id: 'x', createdAt: 'x', result: 'win' }]).peak[0].total, 0);
 });
 
 test('セッションの経過時間: 30分ごとに分け、10試合未満の区分から後ろをまとめる', () => {
@@ -413,9 +390,10 @@ test('引き分け: 勝率は 勝ち÷(勝ち+負け) で、試合数には含�
     match('d2', at(2026, 10, 21, 20, 30), 'tank', 'draw'),
     match('d3', at(2026, 10, 21, 21, 0), 'tank', 'loss'),
   ];
-  const [peak] = timeTagStats(ms).peak;
-  assert.deepEqual([peak.wins, peak.losses, peak.draws, peak.total, peak.rate], [1, 1, 1, 3, 0.5]);
-  assert.equal(timeTagStats([ms[1]]).peak[0].rate, null);
+  // 3試合とも10試合未満の区分なので、経過時間の1つの区分にまとまる
+  const [row] = sessionElapsedStats(ms);
+  assert.deepEqual([row.wins, row.losses, row.draws, row.total, row.rate], [1, 1, 1, 3, 0.5]);
+  assert.equal(sessionElapsedStats([ms[1]])[0].rate, null);
 });
 
 test('引き分け: 改善点記入率の対象にしない。バックアップで読み込める', () => {
