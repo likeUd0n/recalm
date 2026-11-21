@@ -407,7 +407,7 @@ function answerLabel(id, v) {
   if (id === 'result') return RESULT_LABELS[v];
   if (id === 'skillGap') return skillGapLabel(v);
   if (id === 'map') return state.mapById.get(v)?.name ?? DELETED_LABELS.map;
-  if (id === 'hero') return askHeroIds().map(heroName).join(' → ');
+  if (id === 'hero') return askHeroIds().map(heroName).join(', ');
   return v;
 }
 function answerColor(id, v) {
@@ -1068,12 +1068,12 @@ function renderAskOpts() {
   // マッチの質は、選んでいるあいだほかの2つを薄く出す(設計書「簡易入力の設計」)
   box.classList.toggle('has-sel', !!def.scale && state.ui.sel >= 0);
   const showRecent = def.kind === 'pick' && !!def.groups && !typed && hasRecent;
-  // 空白で区切って先に決めたヒーローを、候補の前に「Tracer →」と出す(設計書 F2)
+  // 空白で区切って先に決めたヒーローを、候補の前に「Tracer,」と出す(設計書 F2)
   const headIds = heroInput(state.ui.typed ?? askInput().value)?.ids ?? [];
   const roleBlock = def.kind === 'pick' ? heroRoleBlock() : null;
   fill(box, def.scale ? scaleEnds() : null,
   showRecent ? h('li', { class: 'opt-recent', role: 'presentation' }, '最近:') : null,
-  headIds.length ? h('li', { class: 'opt-recent', role: 'presentation' }, `${headIds.map(heroName).join(' → ')} →`) : null,
+  headIds.length ? h('li', { class: 'opt-recent', role: 'presentation' }, `${headIds.map(heroName).join(', ')},`) : null,
   opts.map((o, n) => h('li', {
     class: o.cmd ? 'opt opt-cmd' : 'opt', role: 'option', id: `ask-opt-${n}`, 'aria-selected': String(n === state.ui.sel),
     onmousedown: (e) => { e.preventDefault(); state.ui.sel = n; state.timer.clicks += 1; askCommit(); },
@@ -1596,7 +1596,7 @@ function renderMatchList(el, list) {
             : null,
           h('div', { class: 'mc-tags' },
             tag(m.mapId ? state.mapById.get(m.mapId)?.name ?? DELETED_LABELS.map : 'マップ未入力', m.mapId ? '' : 'empty'),
-            heroes.length ? tag(heroes.join(' → ')) : tag('ヒーロー未入力', 'empty')),
+            heroes.length ? tag(heroes.join(', ')) : tag('ヒーロー未入力', 'empty')),
           // 入力時間・クリック数は計測と保存を続けるが、画面には出さない(何の数字か分かりにくいため。2026-11-09 ユーザー指定)
           h('div', { class: 'mc-foot' },
             h('span', { class: 'actions' },
@@ -1677,7 +1677,7 @@ function renderReviewView() {
         h('span', { class: `res ${m.result}` }, RESULT_LABELS[m.result]),
         h('span', { class: 'mc-time' }, formatTime(m.createdAt)),
         m.mapId ? h('span', { class: 'tag' }, map ? h('span', { class: 'dot', style: `background: var(--mc-${map.mode})` }) : null, map?.name ?? DELETED_LABELS.map) : null,
-        heroId ? h('span', { class: 'tag' }, hero ? roleIcon(hero.role, 14) : null, mHeroIds.map(heroName).join(' → ')) : null),
+        heroId ? h('span', { class: 'tag' }, hero ? roleIcon(hero.role, 14) : null, mHeroIds.map(heroName).join(', ')) : null),
       // 負けた試合・新しい1問形式は「次に試すこと」を大きく出す(過去の記録に旧項目がある試合は併せて表示)
       m.result === 'loss'
         ? [sub, main].filter(Boolean).flatMap((b) => [h('div', { class: 'review-key' }, labelOf[b.key]), h('div', { class: 'review-main' }, b.text)])

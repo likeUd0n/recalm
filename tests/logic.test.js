@@ -379,7 +379,8 @@ test('splitHeroInput: 空白で区切った複数のヒーローに分け、最�
   assert.deepEqual(s('junker queen tracer').ids, ['junker-queen']);
   assert.deepEqual(s('tracer junker qu'), { ids: ['tracer'], head: 'tracer', query: 'junker qu' });
   assert.deepEqual(s('soldier 76 genji').ids, ['soldier-76']);
-  // 「Tracer → Genji」(答えの表示)や読点でも区切る。一致しない語と重複は捨てる
+  // 「Tracer, Genji」(答えの表示)や「→」・読点でも区切る。一致しない語と重複は捨てる
+  assert.deepEqual(s('Tracer, Genji ').ids, ['tracer', 'genji']);
   assert.deepEqual(s('Tracer → Genji ').ids, ['tracer', 'genji']);
   assert.deepEqual(s('tracer、xxx tracer genji').ids, ['tracer']);
   assert.deepEqual(s('gen'), { ids: [], head: '', query: 'gen' });
