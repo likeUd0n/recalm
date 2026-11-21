@@ -2284,6 +2284,9 @@ function renderStatCards(tried, rows, hold) {
     h('span', { class: 'card-sub' }, tried.thisWeek ? `今週 +${tried.thisWeek}回` : tried.total ? 'これまでの合計' : '「この試合で試した」で数えます'),
     spark);
   const rated = rows.filter((r) => r.rate !== null);
+  // 判定できない理由を分ける: 最初の区切りが参考値でなく50%未満か、試合が足りないか(設計書 F5)
+  const first = rows[0];
+  const belowFirst = first && !first.reference && first.rate !== null && first.rate < 0.5;
   const bw = W / Math.max(rows.length, 1);
   const bars = rated.length
     ? svg('svg', { class: 'spark', viewBox: `0 0 ${W} ${H}`, 'aria-hidden': 'true', preserveAspectRatio: 'none' },
@@ -2295,7 +2298,7 @@ function renderStatCards(tried, rows, hold) {
     hold
       ? [h('span', { class: 'card-value' }, `${hold.until}`, h('small', {}, hold.toEnd ? '分〜' : '分')),
         h('span', { class: 'card-sub' }, hold.toEnd ? 'の区切りまで勝率50%以上' : 'までは勝率50%以上')]
-      : [h('span', { class: 'card-value' }, '—'), h('span', { class: 'card-sub' }, 'まだ目安を出せません')],
+      : [h('span', { class: 'card-value' }, '—'), h('span', { class: 'card-sub' }, belowFirst ? `最初の${SESSION_ELAPSED_STEP_MINUTES}分で勝率50%を下回っています` : 'まだ目安を出せません')],
     bars);
 }
 
