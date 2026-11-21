@@ -1117,6 +1117,8 @@ function openBrowse({ byInput = false } = {}) {
   state.ui.browseGroup = ctx.group.id;
   state.ui.browseSel = 0;
   state.ui.browseByInput = byInput;
+  // 開いている間は、後ろの入力欄に文字(日本語入力を含む)が入らないようにする。キー操作は keydown で受ける
+  askInput().readOnly = true;
   $('#browse-overlay').hidden = false;
   renderBrowse();
 }
@@ -1125,6 +1127,7 @@ function closeBrowse({ restoreFocus = true } = {}) {
   const overlay = $('#browse-overlay');
   if (!overlay || overlay.hidden) return;
   overlay.hidden = true;
+  askInput().readOnly = false;
   if (state.ui.browseByInput) {
     askInput().value = '';
     state.ui.typed = null;
