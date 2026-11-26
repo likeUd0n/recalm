@@ -9,7 +9,7 @@ import {
 } from './config.js';
 import {
   dayKeyOf, jstParts, timeSlotOf, timeSlotRangeText, matchTimeTags, matchesNeedingUpdate, recentMapIds,
-  heroUsage, orderByRecent, searchByName, LOSS_REVIEW_FIELDS, WIN_REVIEW_FIELDS, DRAW_REVIEW_FIELDS, LEGACY_REVIEW_FIELDS, ASK_BEFORE_SAVE, askSteps,
+  heroUsage, orderByRecent, searchByName, LOSS_REVIEW_FIELDS, WIN_REVIEW_FIELDS, DRAW_REVIEW_FIELDS, LEGACY_REVIEW_FIELDS, ASK_BEFORE_SAVE, ASK_WIN_BEFORE_SAVE, askSteps,
   dailyTally, runningTallies, tallyKey, tallyText, winLossText, tallyLabel, shiftDayKey, roleRecords, reviewEntries, latestNextMove,
   buildBackup, parseBackup, backupStatus, statsScope, sessionElapsedStats, winRateHold, splitHeroInput, triedStats, triedSinceLastMatch, currentLossStreak, isAskEmpty, buildDraft, restoreDraft,
 } from './logic.js';
@@ -340,7 +340,7 @@ function stepDef(id) {
   if (id === 'memo') {
     if (state.ui.askMode === 'win' && !state.ask.matchId) {
       return {
-        kind: 'text', short: '反省点・次に試すこと', q: '反省点・次に試すことは?(任意)', sub: '空のまま Enter でも VICTORY を保存します',
+        kind: 'text', short: '反省点・次に試すこと', q: '反省点・次に試すことは?(任意)', sub: '空のまま Enter でとばせます',
         example: '次の集団戦でも味方のタンクとタイミングを合わせて裏から入る。',
       };
     }
@@ -381,8 +381,9 @@ function stepDef(id) {
     };
   }
   if (id === 'hero') {
+    const resLabel = state.ui.askMode === 'win' && !state.ask.matchId ? 'VICTORY' : 'DEFEAT';
     return {
-      kind: 'pick', optional: true, short: 'ヒーロー', q: '使ったヒーローは?(任意)', sub: `空のまま Enter でとばせます。答えるか飛ばすと DEFEAT として試合を保存します。${pickHow()}\n2人以上は空白で区切って打てます(tracer genji)`,
+      kind: 'pick', optional: true, short: 'ヒーロー', q: '使ったヒーローは?(任意)', sub: `空のまま Enter でとばせます。答えるか飛ばすと ${resLabel} として試合を保存します。${pickHow()}\n2人以上は空白で区切って打てます(tracer genji)`,
       example: 'tracer', items: state.master.heroes,
       browseKey: 'hero', browseTitle: 'ヒーローを選ぶ', browseOpenLabel: 'ヒーロー一覧を開く', browseSwitchLabel: 'ロール切替',
       // 空欄のときは「最近」を出し、その下の固定位置のリンク・hero入力・/ / Ctrl+Space で一覧オーバーレイを開く(設計書 F2)
@@ -428,7 +429,7 @@ function answerColor(id, v) {
   return null;
 }
 
-const askStepsNow = () => askSteps(state.ask.answers.result);
+const askStepsNow = () => (state.ui.askMode === 'win' && !state.ask.matchId ? ASK_WIN_BEFORE_SAVE : askSteps(state.ask.answers.result));
 const askInput = () => $('#ask-input');
 
 // 候補(pick の問い)。空のときは「最近」、打ったら名前か読みの一致するもの
@@ -542,7 +543,7 @@ function undoAskSave() {
   undoSave(state.ask.matchId, { ...state.ask.answers });
 }
 
-// 次の問いへ。保存する前は負けメインの3問(気持ち → マップ → ヒーロー。すべて任意)を順に進み、ヒーローの次で DEFEAT として保存する
+// 次の問いへ。保存する前は負けメインの3問(気持ち → マップ → ヒーロー)、勝った時は2問(反省点・次に試すこと → ヒーロー)を進み、ヒーローの次で保存する
 async function askNext() {
   const steps = askStepsNow();
   const i = steps.indexOf(state.ask.step);
@@ -552,12 +553,14 @@ async function askNext() {
     return;
   }
   state.ask.seen.add(state.ask.step);
-  const next = ASK_BEFORE_SAVE[i + 1];
+  const before = state.ui.askMode === 'win' ? ASK_WIN_BEFORE_SAVE : ASK_BEFORE_SAVE;
+  const next = before[i + 1];
   if (next) {
     goAsk(next);
     return;
   }
-  await saveAskMatch();
+  if (state.ui.askMode === 'win') await saveWinMatch();
+  else await saveAskMatch();
 }
 
 // 最後の問いを終えたら、次の試合の最初の問いに戻る
@@ -642,10 +645,6 @@ async function askCommit({ byKey = false } = {}) {
   if (Date.now() < (state.ui.pausedUntil ?? 0)) return;
   if (byKey) state.timer.keys += 1;
   if (def.kind === 'text') {
-    if (state.ui.askMode === 'win' && !state.ask.matchId) {
-      await saveWinMatch(text);
-      return;
-    }
     if (!text && has) await askNext();
     else await setAnswer(id, text);
     return;
@@ -793,15 +792,18 @@ function bindAskMode() {
 function setAskMode(mode) {
   if (state.ask.matchId || state.ui.askMode === mode) return;
   state.ui.askMode = mode;
-  // 勝ちモードは1問完結なので先頭へ戻す
-  if (mode === 'win') state.ask.step = 'memo';
+  // 勝ちモードにはマップの問いがないため、マップに居た場合は先頭へ戻す
+  if (mode === 'win' && !ASK_WIN_BEFORE_SAVE.includes(state.ask.step)) state.ask.step = 'memo';
   renderAsk();
 }
 
-async function saveWinMatch(text) {
+async function saveWinMatch() {
   if (state.ui.saving) return;
   state.ui.saving = true;
   try {
+    const a = state.ask.answers;
+    const heroIds = askHeroIds().filter((x) => state.heroById.has(x));
+    const hero = state.heroById.get(heroIds[0]) ?? null;
     const now = new Date();
     const startedAt = state.timer.startedAt ?? now.getTime();
     const match = {
@@ -809,7 +811,7 @@ async function saveWinMatch(text) {
       createdAt: now.toISOString(),
       date: dayKeyOf(now),
       timeSlot: timeSlotOf(now).id,
-      role: null,
+      role: hero?.role ?? null,
       mapId: null,
       result: 'win',
       skillGap: null,
@@ -817,16 +819,16 @@ async function saveWinMatch(text) {
       clickCount: state.timer.clicks,
       keyCount: state.timer.keys,
     };
-    const nextMove = (text ?? '').trim();
+    const nextMove = (a.memo ?? '').trim();
     await db.saveMatch({
       match,
-      ...childRows(match.id, { heroIds: [], banned: false, bans: new Map(), allyComp: null, enemyComp: null }),
+      ...childRows(match.id, { heroIds, banned: false, bans: new Map(), allyComp: null, enemyComp: null }),
       review: nextMove ? { matchId: match.id, nextMove, updatedAt: now.toISOString() } : null,
     });
     await reload();
     queueAutoSave({ download: true });
     renderToday();
-    bumpToday('win', null);
+    bumpToday('win', hero?.role ?? null);
     state.ui.pausedUntil = Date.now() + FINISH_PAUSE_MS;
     state.ui.askMode = 'loss';
     state.ask = emptyAsk();
@@ -1041,10 +1043,9 @@ async function toggleTried() {
 
 // 問いの進み: 「記録」(保存前の5問)と「振り返り」の段に分け、いまの段の点だけを出す。
 // 段の中では分母が変わらない。振り返りの段では、記録を「✓ 記録」にたたむ(設計書「簡易入力の設計」)
-function renderAskProgress(total, i) {
-  const before = ASK_BEFORE_SAVE.length;
+function renderAskProgress(total, i, { label = '負けた試合', before = ASK_BEFORE_SAVE.length } = {}) {
   const review = i >= before;
-  const [name, count, at] = review ? ['振り返り', total - before, i - before] : ['負けた試合', before, i];
+  const [name, count, at] = review ? ['振り返り', total - before, i - before] : [label, before, i];
   const dots = h('span', { class: 'step-dots' },
     Array.from({ length: count }, (_, k) => h('i', { class: k < at ? 'on' : k === at ? 'now' : '' })));
   const el = $('#ask-step');
@@ -1054,7 +1055,7 @@ function renderAskProgress(total, i) {
     review ? [h('span', { class: 'step-group done' },
       svg('svg', { viewBox: '0 0 12 12', width: 12, height: 12, fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' },
         svg('path', { d: 'M2.5 6.5l2.2 2.2L9.5 3.5' })),
-      '負けた試合'), h('span', { class: 'step-sep' })] : null,
+      label), h('span', { class: 'step-sep' })] : null,
     h('span', { class: 'step-group' }, name, dots));
 }
 
@@ -1108,10 +1109,7 @@ function renderAsk({ focus = true } = {}) {
   $('#ask-sub').textContent = def.sub ?? '';
   $('#ask-sub').hidden = !def.sub;
   if (isWinMode) {
-    const el = $('#ask-step');
-    el.removeAttribute('role');
-    el.removeAttribute('aria-label');
-    el.textContent = '勝った試合(1問で完了)';
+    renderAskProgress(ASK_WIN_BEFORE_SAVE.length, i, { label: '勝った試合', before: ASK_WIN_BEFORE_SAVE.length });
   } else {
     renderAskProgress(steps.length, i);
   }
@@ -1219,9 +1217,10 @@ function renderAskOpts() {
   const empty = !askInput().value.trim();
   const has = !!askAnswer(state.ask.step);
   const send = $('#ask-send');
-  if (state.ui.askMode === 'win' && !state.ask.matchId) {
-    send.textContent = 'VICTORY を保存';
-    send.classList.remove('skip');
+  if (state.ui.askMode === 'win' && !state.ask.matchId && state.ask.step === 'hero') {
+    const picked = state.ui.sel >= 0;
+    send.textContent = picked ? 'VICTORY を保存' : '飛ばして保存';
+    send.classList.toggle('skip', !picked);
   } else if (def.kind === 'text') {
     send.textContent = empty ? (has ? 'そのまま' : 'とばす') : '次へ';
     send.classList.toggle('skip', empty);

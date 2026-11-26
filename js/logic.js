@@ -239,6 +239,8 @@ export const LEGACY_REVIEW_FIELDS = {
 
 // 保存する前に聞く問い(負けメイン: 主観の整理 → マップ → ヒーロー)。hero に答えるか飛ばすと DEFEAT で試合を保存する。
 export const ASK_BEFORE_SAVE = ['memo', 'map', 'hero'];
+// 勝ったときの問い(反省点・次に試すこと → ヒーロー。どちらも任意、hero に答えるか飛ばすと VICTORY で試合を保存する)。
+export const ASK_WIN_BEFORE_SAVE = ['memo', 'hero'];
 
 // 問いの順番。振り返りの問いはどの結果でも1問(設計書 F6)。
 export function askSteps(result = 'loss') {
