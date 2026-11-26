@@ -630,6 +630,29 @@ async function setAnswer(id, value) {
   await askNext();
 }
 
+// いまの問いの答えを消す(空欄での Delete。電卓方式。設計書「簡易入力の設計」)
+async function clearAnswer(id) {
+  if (state.ask.matchId && !ASK_BEFORE_SAVE.includes(id)) {
+    try {
+      await saveAskReview(id, '');
+    } catch (e) {
+      toast(`保存できませんでした: ${e?.message ?? e}`);
+      return;
+    }
+  } else if (id === 'hero') {
+    state.ask.answers.heroId = null;
+    state.ask.answers.otherHeroIds = [];
+  } else if (id === 'map') {
+    state.ask.answers.mapId = null;
+  } else if (id === 'memo') {
+    state.ask.answers.memo = '';
+  } else {
+    state.ask.answers[id] = null;
+  }
+  renderAsk();
+  saveDraft();
+}
+
 // 振り返りの答えを保存する
 async function saveAskReview(id, value) {
   await saveReview(state.ask.matchId, { [id]: value });
@@ -1120,7 +1143,12 @@ function renderAsk({ focus = true } = {}) {
   const cur = answerLabel(id, askAnswer(id));
   const curEl = $('#ask-cur');
   curEl.hidden = !cur;
-  fill(curEl, cur ? ['いまの答え: ', h('b', {}, cur), isTouch() ? '(空のまま決めるとそのまま)' : '(空のまま Enter でそのまま。Tab で書き直す)'] : null);
+  const curHint = isTouch()
+    ? '(空のまま決めるとそのまま)'
+    : def.kind === 'text'
+      ? '(空のまま Enter でそのまま。Shift+Tab で書き直す / Delete で消す)'
+      : '(空のまま Enter でそのまま。打ち直すと上書き / Delete で消す)';
+  fill(curEl, cur ? ['いまの答え: ', h('b', {}, cur), curHint] : null);
 
   renderAskOpts();
   renderAskKeys(def, !!cur);
@@ -1148,7 +1176,9 @@ function renderAskKeys(def, has) {
     def.kind === 'text' ? null : [[k('Enter')], `決める${def.optional ? '(空のままならとばす)' : ''}`],
     def.groups ? [[k('/'), ' / ', k('Ctrl'), '+', k('Space')], def.browseOpenLabel] : null,
     def.browseKey ? [[k(def.browseKey)], ` と打って${def.browseOpenLabel}`] : null,
-    has ? [['空で ', k('Tab')], 'いまの答えを書き直す'] : null,
+    !state.ask.matchId && state.ask.step === 'memo' ? [['空で ', k('Tab')], '負けた / 勝った を切り替える'] : null,
+    has && def.kind === 'text' ? [['空で ', k('Shift'), '+', k('Tab')], 'いまの答えを書き直す'] : null,
+    has ? [['空で ', k('Delete')], 'いまの答えを消す'] : null,
     [['空で ', k('←'), ' / ', k('Backspace')], undo ? '保存を取り消して、ヒーローの問いに戻る' : '前の問いへ'],
     [['空で ', k('→')], '次の問いへ'],
     [[k('Alt'), '+', k('1'), '〜', k('4')], '画面の切り替え'],
@@ -1400,8 +1430,15 @@ function bindAsk() {
       renderAskKeys(def, !!askAnswer(state.ask.step));
       return;
     }
-    // 入力欄が空のときだけ、← と Backspace・Delete で前の問いへ、→ で次の問いへ(答えてある問いだけ)
-    if (empty && ['ArrowLeft', 'Backspace', 'Delete'].includes(e.key)) {
+    // 入力欄が空のとき: Delete はいまの答えがあれば消し、空なら前の問いへ(電卓方式。2026-11-26 ユーザー指定)
+    if (empty && e.key === 'Delete') {
+      e.preventDefault();
+      if (askAnswer(state.ask.step)) clearAnswer(state.ask.step);
+      else askBack({ repeat: e.repeat });
+      return;
+    }
+    // 入力欄が空のときだけ、← と Backspace で前の問いへ、→ で次の問いへ(答えてある問いだけ)
+    if (empty && ['ArrowLeft', 'Backspace'].includes(e.key)) {
       e.preventDefault();
       askBack({ repeat: e.repeat });
       return;
@@ -1411,16 +1448,16 @@ function bindAsk() {
       if (askAnswer(state.ask.step) || def.kind === 'text' || def.optional) askNext();
       return;
     }
-    // Tab(1問目の空欄で答えがないとき): 負けた / 勝った を切り替える(2026-11-26 ユーザー指定)
-    if (e.key === 'Tab' && !e.shiftKey && empty && !state.ask.matchId && state.ask.step === 'memo' && !askAnswer('memo')) {
+    // Tab(1問目の空欄): 負けた / 勝った を切り替える(2026-11-26 ユーザー指定)
+    if (e.key === 'Tab' && !e.shiftKey && empty && !state.ask.matchId && state.ask.step === 'memo') {
       e.preventDefault();
       setAskMode(state.ui.askMode === 'win' ? 'loss' : 'win');
       return;
     }
-    // Tab(空のとき): いまの答えを入力欄に出して書き直す
-    if (e.key === 'Tab' && !e.shiftKey && empty && askAnswer(state.ask.step)) {
+    // Shift+Tab(自由記述が空のとき): いまの答えを入力欄に出して書き直す(2026-11-26 ユーザー指定)
+    if (e.key === 'Tab' && e.shiftKey && empty && def.kind === 'text' && askAnswer(state.ask.step)) {
       e.preventDefault();
-      input.value = def.kind === 'pick' ? answerLabel(state.ask.step, askAnswer(state.ask.step)) : askAnswer(state.ask.step);
+      input.value = askAnswer(state.ask.step);
       input.dispatchEvent(new Event('input'));
       return;
     }
