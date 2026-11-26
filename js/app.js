@@ -64,7 +64,7 @@ const state = {
   display: { ...DISPLAY_DEFAULTS }, // 表示の設定(config.js の DISPLAY_META_KEY)
   // listDay: 履歴で見ている1日(null は今日)。sel: 問いかけ入力で選んでいる候補・段階の位置(-1 は選んでいない)
   // historyMode: 履歴の表示('review' まとめ / 'games' 試合一覧。開いたときはまとめ)。reviewResult・reviewHero: 振り返りの絞り込み('all' はすべて)
-  ui: { listDay: null, sel: -1, browseGroup: null, browseSel: 0, browseByInput: false, saving: false, typed: null, keysOpen: false, resumed: false, pausedUntil: 0, welcome: false, quickMatch: null, historyMode: 'review', reviewResult: 'all', reviewHero: 'all' },
+  ui: { listDay: null, sel: -1, browseGroup: null, browseSel: 0, browseByInput: false, saving: false, typed: null, keysOpen: false, resumed: false, pausedUntil: 0, welcome: false, askMode: 'loss', historyMode: 'review', reviewResult: 'all', reviewHero: 'all' },
   timer: { startedAt: null, clicks: 0, keys: 0 }, // clicks = 候補などを押した回数、keys = Enter・数字キーで決めた回数
 };
 
@@ -190,7 +190,7 @@ function showView() {
 
 function bindEvents() {
   bindAsk();
-  bindQuickWin();
+  bindAskMode();
   bindKeyboard();
 
   // 「?」の解説: 押すと出し、もう一度押すかほかを押すと消す(カーソルを合わせられないスマホでも見られる。設計書 画面設計)
@@ -338,6 +338,12 @@ const pickHow = () => (isTouch() ? '候補を押して選びます' : '途中ま
 // 問いの中身。kind で入力欄の動きが変わる(text・pick)
 function stepDef(id) {
   if (id === 'memo') {
+    if (state.ui.askMode === 'win' && !state.ask.matchId) {
+      return {
+        kind: 'text', short: '反省点・次に試すこと', q: '反省点・次に試すことは?(任意)', sub: '空のまま Enter でも VICTORY を保存します',
+        example: '次の集団戦でも味方のタンクとタイミングを合わせて裏から入る。',
+      };
+    }
     return {
       kind: 'text', short: '気持ちの整理', q: 'いまの気持ちは?(任意)', sub: '先に書き出すと、落ち着いて振り返れます',
       example: '裏取りが全部読まれていてイライラした。でも最後の集団戦はうまく合わせられた。',
@@ -636,6 +642,10 @@ async function askCommit({ byKey = false } = {}) {
   if (Date.now() < (state.ui.pausedUntil ?? 0)) return;
   if (byKey) state.timer.keys += 1;
   if (def.kind === 'text') {
+    if (state.ui.askMode === 'win' && !state.ask.matchId) {
+      await saveWinMatch(text);
+      return;
+    }
     if (!text && has) await askNext();
     else await setAnswer(id, text);
     return;
@@ -774,36 +784,26 @@ async function saveAskMatchNow() {
   });
 }
 
-// ---------- 勝ち・引き分け専用バー(設計書「簡易入力の設計」案A) ----------
-// 1タップで即保存し、その場で「次に試すこと・反省点」1問だけ任意で書ける。
-function bindQuickWin() {
-  $('#quick-win').addEventListener('click', () => quickSaveResult('win'));
-  $('#quick-draw').addEventListener('click', () => quickSaveResult('draw'));
-  $('#win-after-save').addEventListener('click', commitQuickWin);
-  $('#win-after-close').addEventListener('click', closeQuickWin);
-  $('#win-after-undo').addEventListener('click', undoQuickWin);
-  const input = $('#win-after-input');
-  input.addEventListener('input', () => {
-    const empty = !input.value.trim();
-    const btn = $('#win-after-save');
-    btn.textContent = empty ? 'とばす' : '保存';
-    btn.classList.toggle('skip', empty);
-    renderTextCount($('#win-after-count'), input.value.length);
-    input.style.height = 'auto';
-    input.style.height = `${Math.max(input.scrollHeight, 32)}px`;
-  });
-  input.addEventListener('keydown', (e) => {
-    if (e.isComposing || e.keyCode === 229 || e.altKey || e.metaKey || e.ctrlKey) return;
-    if (e.key === 'Escape') { e.preventDefault(); closeQuickWin(); return; }
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commitQuickWin(); }
-  });
+// ---------- 負けた / 勝った切替と勝ち1問保存(設計書「簡易入力の設計」) ----------
+function bindAskMode() {
+  $('#mode-loss').addEventListener('click', () => setAskMode('loss'));
+  $('#mode-win').addEventListener('click', () => setAskMode('win'));
 }
 
-async function quickSaveResult(result) {
+function setAskMode(mode) {
+  if (state.ask.matchId || state.ui.askMode === mode) return;
+  state.ui.askMode = mode;
+  // 勝ちモードは1問完結なので先頭へ戻す
+  if (mode === 'win') state.ask.step = 'memo';
+  renderAsk();
+}
+
+async function saveWinMatch(text) {
   if (state.ui.saving) return;
   state.ui.saving = true;
   try {
     const now = new Date();
+    const startedAt = state.timer.startedAt ?? now.getTime();
     const match = {
       id: newId(),
       createdAt: now.toISOString(),
@@ -811,34 +811,32 @@ async function quickSaveResult(result) {
       timeSlot: timeSlotOf(now).id,
       role: null,
       mapId: null,
-      result,
+      result: 'win',
       skillGap: null,
-      inputSeconds: 0,
-      clickCount: 1,
-      keyCount: 0,
+      inputSeconds: Math.round((now.getTime() - startedAt) / 100) / 10,
+      clickCount: state.timer.clicks,
+      keyCount: state.timer.keys,
     };
+    const nextMove = (text ?? '').trim();
     await db.saveMatch({
       match,
       ...childRows(match.id, { heroIds: [], banned: false, bans: new Map(), allyComp: null, enemyComp: null }),
-      review: null,
+      review: nextMove ? { matchId: match.id, nextMove, updatedAt: now.toISOString() } : null,
     });
     await reload();
-    queueAutoSave();
+    queueAutoSave({ download: true });
     renderToday();
-    bumpToday(result, null);
-    state.ui.quickMatch = { id: match.id, result };
-    const input = $('#win-after-input');
-    input.value = '';
-    input.style.height = 'auto';
-    $('#win-after-save').textContent = 'とばす';
-    $('#win-after-save').classList.add('skip');
-    renderTextCount($('#win-after-count'), 0);
-    renderQuickWin();
-    renderAsk({ focus: false });
-    if (!$('#view-home').hidden && !$('#match-dialog').open) input.focus();
-    toast(savedSign(result), {
+    bumpToday('win', null);
+    state.ui.pausedUntil = Date.now() + FINISH_PAUSE_MS;
+    state.ui.askMode = 'loss';
+    state.ask = emptyAsk();
+    state.timer = { startedAt: null, clicks: 0, keys: 0 };
+    askInput().value = '';
+    renderAsk();
+    saveDraft();
+    toast(savedSign('win'), {
       ms: SAVED_MS,
-      action: { label: '保存を取り消す', run: () => undoQuickMatchById(match.id) },
+      action: { label: '保存を取り消す', run: () => undoWinMatch(match.id) },
     });
   } catch (e) {
     toast(`保存できませんでした: ${e?.message ?? e}`);
@@ -847,61 +845,17 @@ async function quickSaveResult(result) {
   }
 }
 
-async function commitQuickWin() {
-  const qm = state.ui.quickMatch;
-  if (!qm) return;
-  const text = $('#win-after-input').value.trim();
-  if (text) {
-    try {
-      await saveReview(qm.id, { nextMove: text });
-    } catch (e) {
-      toast(`保存できませんでした: ${e?.message ?? e}`);
-      return;
-    }
-  }
-  closeQuickWin();
-  if (text) toast('次に試すことを保存しました');
-}
-
-function closeQuickWin() {
-  if (!state.ui.quickMatch) return;
-  state.ui.quickMatch = null;
-  queueAutoSave({ download: true });
-  renderQuickWin();
-  renderAsk();
-}
-
-async function undoQuickWin() {
-  const qm = state.ui.quickMatch;
-  if (!qm) return;
-  await undoQuickMatchById(qm.id);
-}
-
-async function undoQuickMatchById(matchId) {
+async function undoWinMatch(matchId) {
   try {
     await db.deleteMatch(matchId);
   } catch (e) {
     toast(`取り消せませんでした: ${e?.message ?? e}`);
     return;
   }
-  if (state.ui.quickMatch?.id === matchId) state.ui.quickMatch = null;
   await reload();
   queueAutoSave();
   renderAll();
   toast('保存を取り消しました');
-}
-
-function renderQuickWin() {
-  const qm = state.ui.quickMatch;
-  const inLossReview = !!state.ask.matchId;
-  $('#win-strip').hidden = !!qm || inLossReview;
-  const after = $('#win-after');
-  after.hidden = !qm;
-  if (qm) {
-    const tag = $('#win-after-tag');
-    tag.textContent = qm.result === 'win' ? '★ VICTORY を保存しました' : 'DRAW を保存しました';
-    tag.classList.toggle('is-draw', qm.result !== 'win');
-  }
 }
 
 // 保存の合図(設計書「簡易入力の設計」)。保存直後のトーストに、結果のアイコンと結果名と一言を出す。
@@ -1107,11 +1061,14 @@ function renderAskProgress(total, i) {
 function renderAsk({ focus = true } = {}) {
   // 「はじめての方へ」は、開いたときに記録が0件なら出す。保存しても消さず、次に開いたときから出さない(入力欄が跳ばないように。設計書 画面設計)
   $('#welcome').hidden = !state.ui.welcome;
-  renderQuickWin();
-  // 3連敗以上のとき、負けメインの問いかけ入力の上部に慰めの1行を出す(2026-11-26 ユーザー指定)
+  const isWinMode = state.ui.askMode === 'win' && !state.ask.matchId;
+  $('#ask-mode-row').hidden = !!state.ask.matchId;
+  $('#mode-loss').setAttribute('aria-pressed', String(!isWinMode));
+  $('#mode-win').setAttribute('aria-pressed', String(isWinMode));
+  // 3連敗以上のとき、「負けた」モードの上部に慰めの1行を出す(2026-11-26 ユーザー指定)
   const streak = currentLossStreak(state.matches);
   const comfortEl = $('#ask-comfort');
-  const showComfort = streak >= 3 && !state.ask.matchId;
+  const showComfort = streak >= 3 && !state.ask.matchId && !isWinMode;
   comfortEl.hidden = !showComfort;
   if (showComfort) {
     comfortEl.textContent = `${streak}連敗中です。まずは頭の中のモヤモヤをそのまま吐き出して、ひと息つきましょう。`;
@@ -1150,7 +1107,14 @@ function renderAsk({ focus = true } = {}) {
   $('#ask-q').textContent = def.q;
   $('#ask-sub').textContent = def.sub ?? '';
   $('#ask-sub').hidden = !def.sub;
-  renderAskProgress(steps.length, i);
+  if (isWinMode) {
+    const el = $('#ask-step');
+    el.removeAttribute('role');
+    el.removeAttribute('aria-label');
+    el.textContent = '勝った試合(1問で完了)';
+  } else {
+    renderAskProgress(steps.length, i);
+  }
   const input = askInput();
   input.placeholder = def.example ?? '';
 
@@ -1166,7 +1130,7 @@ function renderAsk({ focus = true } = {}) {
   $('#reset-form').hidden = !!state.ask.matchId;
   $('#undo-save').hidden = !state.ask.matchId;
   growAsk();
-  if (focus && !state.ui.quickMatch && !$('#view-home').hidden && !$('#match-dialog').open) input.focus();
+  if (focus && !$('#view-home').hidden && !$('#match-dialog').open) input.focus();
 }
 
 // 使えるキーの説明。主な3つを出し、残りは「ほかのキー操作」で開く(設計書「簡易入力の設計」)
@@ -1255,9 +1219,16 @@ function renderAskOpts() {
   const empty = !askInput().value.trim();
   const has = !!askAnswer(state.ask.step);
   const send = $('#ask-send');
-  if (def.kind === 'text') send.textContent = empty ? (has ? 'そのまま' : 'とばす') : '次へ';
-  else send.textContent = state.ui.sel >= 0 && opts[state.ui.sel]?.id !== askAnswer(state.ask.step) ? '決める' : has ? 'そのまま' : def.optional ? 'とばす' : '決める';
-  send.classList.toggle('skip', def.kind === 'text' ? empty : state.ui.sel < 0);
+  if (state.ui.askMode === 'win' && !state.ask.matchId) {
+    send.textContent = 'VICTORY を保存';
+    send.classList.remove('skip');
+  } else if (def.kind === 'text') {
+    send.textContent = empty ? (has ? 'そのまま' : 'とばす') : '次へ';
+    send.classList.toggle('skip', empty);
+  } else {
+    send.textContent = state.ui.sel >= 0 && opts[state.ui.sel]?.id !== askAnswer(state.ask.step) ? '決める' : has ? 'そのまま' : def.optional ? 'とばす' : '決める';
+    send.classList.toggle('skip', state.ui.sel < 0);
+  }
 }
 
 // ---------- マップ・ヒーロー一覧オーバーレイ(設計書 F1・F2) ----------
@@ -1439,6 +1410,12 @@ function bindAsk() {
     if (empty && e.key === 'ArrowRight') {
       e.preventDefault();
       if (askAnswer(state.ask.step) || def.kind === 'text' || def.optional) askNext();
+      return;
+    }
+    // Tab(1問目の空欄で答えがないとき): 負けた / 勝った を切り替える(2026-11-26 ユーザー指定)
+    if (e.key === 'Tab' && !e.shiftKey && empty && !state.ask.matchId && state.ask.step === 'memo' && !askAnswer('memo')) {
+      e.preventDefault();
+      setAskMode(state.ui.askMode === 'win' ? 'loss' : 'win');
       return;
     }
     // Tab(空のとき): いまの答えを入力欄に出して書き直す

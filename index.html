@@ -46,32 +46,16 @@
         </div>
       </div>
     </div>
-    <!-- 勝ち・引き分けの専用バー(設計書「簡易入力の設計」案A)。1タップで即保存し、任意で一言だけ書ける -->
-    <div class="win-strip" id="win-strip">
-      <span class="win-strip-text">勝った試合は 1タップで記録</span>
-      <div class="win-strip-actions">
-        <button type="button" class="win-btn" id="quick-win">★ VICTORY を記録</button>
-        <button type="button" class="link draw-link" id="quick-draw">引き分け</button>
-      </div>
-    </div>
-    <section class="panel win-after" id="win-after" hidden aria-labelledby="win-after-q">
-      <div class="win-after-head">
-        <span class="win-after-tag" id="win-after-tag"></span>
-        <div class="win-after-head-actions">
-          <button type="button" class="link" id="win-after-undo">保存を取り消す</button>
-          <button type="button" class="link" id="win-after-close">閉じる(とばす)</button>
-        </div>
-      </div>
-      <p class="ask-q" id="win-after-q">次に試すこと・反省点は?(任意)</p>
-      <div class="ask-bar">
-        <textarea id="win-after-input" class="ask-input" rows="1" maxlength="300" placeholder="例: 次の集団戦でも味方のタンクとタイミングを合わせて裏から入る" aria-labelledby="win-after-q" autocomplete="off"></textarea>
-        <button type="button" id="win-after-save" class="ask-send skip">とばす</button>
-      </div>
-      <p class="text-count muted" id="win-after-count" hidden></p>
-    </section>
-    <!-- 問いかけ入力(設計書「簡易入力の設計」)。負けメイン。入力欄は1つで、上に出る問いに順に答える -->
+    <!-- 問いかけ入力(設計書「簡易入力の設計」)。入力欄は1つ。「負けた / 勝った」を上で切り替える -->
     <section class="panel ask-panel" id="match-form" aria-labelledby="form-title">
       <h2 id="form-title" class="visually-hidden">試合を記録する</h2>
+      <div class="ask-mode-row" id="ask-mode-row">
+        <div class="seg ask-mode" role="group" aria-label="試合の結果">
+          <button type="button" id="mode-loss" data-ask-mode="loss" aria-pressed="true">負けた</button>
+          <button type="button" id="mode-win" data-ask-mode="win" aria-pressed="false">勝った</button>
+        </div>
+        <span class="ask-mode-hint muted"><kbd>Tab</kbd> で切替</span>
+      </div>
       <p class="ask-comfort" id="ask-comfort" role="status" hidden></p>
       <ol class="ask-done" id="ask-done" aria-label="答えた問い"></ol>
       <p class="ask-resume muted" id="ask-resume" hidden></p>

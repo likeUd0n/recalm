@@ -398,34 +398,13 @@ textarea { width: 100%; }
 .time-tag.time-peak { color: var(--accent); box-shadow: inset 0 0 0 1px currentColor; background: none; }
 .time-tag.time-offpeak, .time-tag.time-weekend { color: var(--warn); box-shadow: inset 0 0 0 1px currentColor; background: none; }
 
-/* ---------- 勝ち・引き分け専用バーと連敗時の慰め(設計書「簡易入力の設計」案A) ---------- */
-.win-strip {
-  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s2) var(--s3);
-  margin: var(--s4) 0 calc(var(--s2) * -1);
-  padding: var(--s2) var(--s4);
-  background: var(--win-soft);
-  border: 1px solid color-mix(in srgb, var(--win) 45%, transparent);
-  border-radius: var(--r-ctl);
-}
-.win-strip[hidden] { display: none; }
-.win-strip-text { font-size: var(--fs-sm); color: var(--text); }
-.win-strip-actions { display: flex; align-items: center; gap: var(--s3); }
-.win-btn {
-  border: 1px solid var(--win); background: var(--panel); color: var(--win-text);
-  font-weight: 700; border-radius: 999px; padding: 6px var(--s4); min-height: 40px;
-}
-.win-btn:hover:not(:disabled) { border-color: var(--win); background: color-mix(in srgb, var(--win) 16%, var(--panel)); }
-.draw-link { font-size: var(--fs-sm); color: var(--muted); }
-.win-after {
-  display: grid; gap: var(--s3);
-  background: var(--win-soft);
-  border: 1px solid var(--win);
-}
-.win-after[hidden] { display: none; }
-.win-after-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: var(--s2); }
-.win-after-tag { font-weight: 800; color: var(--win-text); letter-spacing: .04em; }
-.win-after-tag.is-draw { color: var(--draw-text); }
-.win-after-head-actions { display: flex; align-items: center; gap: var(--s3); font-size: var(--fs-sm); }
+/* ---------- 負けた / 勝った切替と連敗時の慰め(設計書「簡易入力の設計」) ---------- */
+.ask-mode-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); }
+.ask-mode-row[hidden] { display: none; }
+.ask-mode button[data-ask-mode="loss"][aria-pressed="true"] { color: var(--loss-text); }
+.ask-mode button[data-ask-mode="win"][aria-pressed="true"] { color: var(--win-text); }
+.ask-mode-hint { font-size: var(--fs-sm); }
+@media (hover: none) { .ask-mode-hint { display: none; } }
 .ask-comfort {
   margin: 0; padding: var(--s2) var(--s3);
   background: var(--loss-soft);
