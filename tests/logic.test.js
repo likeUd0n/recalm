@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {
   dayKeyOf, normalizeMatch, matchesNeedingUpdate, runningTallies, dailyTally, tallyText,
   shiftDayKey, reviewRates, isPeakTime, isWeekendDay, matchTimeTags, timeSlotOf,
-  buildBackup, parseBackup, backupStatus, statsScope, sessionElapsedStats, winRateHold, splitHeroInput, weekStartKey, triedSinceLastMatch, triedStats, askSteps, isAskEmpty, buildDraft, restoreDraft,
+  buildBackup, parseBackup, backupStatus, statsScope, sessionElapsedStats, winRateHold, splitHeroInput, weekStartKey, triedSinceLastMatch, triedStats, currentLossStreak, askSteps, isAskEmpty, buildDraft, restoreDraft,
   searchByName, roleRecords, reviewEntries, latestNextMove,
 } from '../js/logic.js';
 
@@ -320,11 +320,20 @@ test('バックアップを促す条件: 記録があり、未実施か7日以�
 
 // ---------- 問いかけ入力と入力途中の下書き ----------
 
-test('問いの順番: 気持ち → 結果 → マッチの質 → マップ → ヒーロー、続けて結果ごとの振り返り', () => {
-  assert.deepEqual(askSteps(null), ['memo', 'result', 'skillGap', 'map', 'hero']);
-  assert.deepEqual(askSteps('loss').slice(5), ['improvement']);
-  assert.deepEqual(askSteps('win').slice(5), ['nextMove']);
-  assert.deepEqual(askSteps('draw').slice(5), ['nextMove']);
+test('問いの順番: 負けメインの気持ち → マップ → ヒーロー、続けて結果ごとの振り返り', () => {
+  assert.deepEqual(askSteps(null), ['memo', 'map', 'hero', 'improvement']);
+  assert.deepEqual(askSteps('loss').slice(3), ['improvement']);
+  assert.deepEqual(askSteps('win').slice(3), ['nextMove']);
+  assert.deepEqual(askSteps('draw').slice(3), ['nextMove']);
+});
+
+test('currentLossStreak: 直近の連敗数を数える(勝ち・引き分けで止まる)', () => {
+  const m = (id, h, result) => match(id, at(2026, 11, 26, h), null, result);
+  assert.equal(currentLossStreak([]), 0);
+  assert.equal(currentLossStreak([m('1', 20, 'loss'), m('2', 21, 'loss'), m('3', 22, 'loss')]), 3);
+  // 入力順がバラバラでも新しい順で数える。勝ち・引き分けでリセット
+  assert.equal(currentLossStreak([m('3', 22, 'loss'), m('1', 20, 'loss'), m('2', 21, 'win')]), 1);
+  assert.equal(currentLossStreak([m('1', 20, 'loss'), m('2', 21, 'draw')]), 0);
 });
 
 const emptyAsk = () => ({

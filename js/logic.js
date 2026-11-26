@@ -235,17 +235,28 @@ export const LEGACY_REVIEW_FIELDS = {
 
 // ---------- 問いかけ入力(設計書「簡易入力の設計」) ----------
 
-// 保存する前に聞く問い(主観の整理 → 事実)。hero に答えると試合を保存する。
-export const ASK_BEFORE_SAVE = ['memo', 'result', 'skillGap', 'map', 'hero'];
+// 保存する前に聞く問い(負けメイン: 主観の整理 → マップ → ヒーロー)。hero に答えるか飛ばすと DEFEAT で試合を保存する。
+export const ASK_BEFORE_SAVE = ['memo', 'map', 'hero'];
 
 // 問いの順番。振り返りの問いはどの結果でも1問(設計書 F6)。
-export function askSteps(result) {
+export function askSteps(result = 'loss') {
   const review = {
     loss: LOSS_REVIEW_FIELDS.map((f) => f.key),
     win: WIN_REVIEW_FIELDS.map((f) => f.key),
     draw: DRAW_REVIEW_FIELDS.map((f) => f.key),
-  }[result] ?? [];
+  }[result ?? 'loss'] ?? [];
   return [...ASK_BEFORE_SAVE, ...review];
+}
+
+// 直近の連敗数(設計書「簡易入力の設計」)。新しい試合から見て連続して DEFEAT の数を返す。
+export function currentLossStreak(matches) {
+  const sorted = [...matches].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  let n = 0;
+  for (const m of sorted) {
+    if (m.result === 'loss') n += 1;
+    else break;
+  }
+  return n;
 }
 
 // ---------- 入力途中の下書き(設計書「簡易入力の設計」) ----------

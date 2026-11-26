@@ -15,9 +15,11 @@
   --accent-soft: #e8effc;
   --win: hsl(42 var(--sat) var(--lum));        /* VICTORY: 黄色(面・枠・帯) */
   --win-text: hsl(40 85% 30%);                 /* 白地で読める濃さの黄(文字用) */
+  --win-soft: #fdf6e3;
   /* DEFEAT: 青灰(面・枠・帯)。負けを失敗として強調しないよう赤にしない。DRAW の灰色と見分けられる青みを残す(設計書 敗北直後の見せ方) */
   --loss: hsl(224 28% 56%);
   --loss-text: hsl(224 30% 42%);
+  --loss-soft: #eef1f7;
   --danger: hsl(4 var(--sat) var(--lum));      /* 読み込みの失敗・削除など、操作の危険を知らせる赤 */
   --draw: #a3a7b0;                             /* DRAW: 灰色(面・枠・帯) */
   --draw-text: var(--muted);
@@ -69,8 +71,10 @@
     --sat: 50%; --lum: 64%;
     --accent-soft: #23304b;
     --win-text: hsl(42 75% 66%);
+    --win-soft: #2e2818;
     --loss: hsl(224 32% 66%);
     --loss-text: hsl(224 42% 76%);
+    --loss-soft: #202430;
     --ok-text: var(--role-support);
     --ally-text: hsl(28 75% 70%);
     --enemy-text: hsl(217 70% 76%);
@@ -334,8 +338,8 @@ textarea { width: 100%; }
 .prev-imp-main h2 { margin: 0; font-size: var(--fs-sm); color: var(--text); font-weight: 700; white-space: nowrap; }
 .prev-imp-text { margin: 0; font-size: var(--fs-md); line-height: 1.6; white-space: pre-line; }
 .prev-imp-top a { font-size: var(--fs-sm); white-space: nowrap; }
-.prev-imp-tried { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--s3); font-size: var(--fs-sm); }
-.prev-imp-tried button.link[aria-pressed="true"] { color: var(--ok-text); text-decoration: none; font-weight: 700; }
+.prev-imp-actions { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--s3); margin-left: auto; font-size: var(--fs-sm); }
+.prev-imp-actions button.link[aria-pressed="true"] { color: var(--ok-text); text-decoration: none; font-weight: 700; }
 .prev-imp-from { margin: 0; font-size: var(--fs-sm); white-space: pre-line; }
 .prev-imp-sub { margin: 0; font-size: var(--fs-sm); }
 
@@ -393,6 +397,41 @@ textarea { width: 100%; }
 .slot-icon { flex: none; }
 .time-tag.time-peak { color: var(--accent); box-shadow: inset 0 0 0 1px currentColor; background: none; }
 .time-tag.time-offpeak, .time-tag.time-weekend { color: var(--warn); box-shadow: inset 0 0 0 1px currentColor; background: none; }
+
+/* ---------- 勝ち・引き分け専用バーと連敗時の慰め(設計書「簡易入力の設計」案A) ---------- */
+.win-strip {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s2) var(--s3);
+  margin: var(--s4) 0 calc(var(--s2) * -1);
+  padding: var(--s2) var(--s4);
+  background: var(--win-soft);
+  border: 1px solid color-mix(in srgb, var(--win) 45%, transparent);
+  border-radius: var(--r-ctl);
+}
+.win-strip[hidden] { display: none; }
+.win-strip-text { font-size: var(--fs-sm); color: var(--text); }
+.win-strip-actions { display: flex; align-items: center; gap: var(--s3); }
+.win-btn {
+  border: 1px solid var(--win); background: var(--panel); color: var(--win-text);
+  font-weight: 700; border-radius: 999px; padding: 6px var(--s4); min-height: 40px;
+}
+.win-btn:hover:not(:disabled) { border-color: var(--win); background: color-mix(in srgb, var(--win) 16%, var(--panel)); }
+.draw-link { font-size: var(--fs-sm); color: var(--muted); }
+.win-after {
+  display: grid; gap: var(--s3);
+  background: var(--win-soft);
+  border: 1px solid var(--win);
+}
+.win-after[hidden] { display: none; }
+.win-after-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: var(--s2); }
+.win-after-tag { font-weight: 800; color: var(--win-text); letter-spacing: .04em; }
+.win-after-tag.is-draw { color: var(--draw-text); }
+.win-after-head-actions { display: flex; align-items: center; gap: var(--s3); font-size: var(--fs-sm); }
+.ask-comfort {
+  margin: 0; padding: var(--s2) var(--s3);
+  background: var(--loss-soft); border-left: 3px solid var(--loss); border-radius: var(--r-sm);
+  font-size: var(--fs-sm); color: var(--loss-text);
+}
+.ask-comfort[hidden] { display: none; }
 
 /* ---------- 記録: 問いかけ入力(設計書「簡易入力の設計」) ----------
    入力欄は1つ。上に答えた問いの一覧、いまの問い、下に候補と使えるキーを並べる */

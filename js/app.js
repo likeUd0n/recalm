@@ -11,7 +11,7 @@ import {
   dayKeyOf, jstParts, timeSlotOf, timeSlotRangeText, matchTimeTags, matchesNeedingUpdate, recentMapIds,
   heroUsage, orderByRecent, searchByName, LOSS_REVIEW_FIELDS, WIN_REVIEW_FIELDS, DRAW_REVIEW_FIELDS, LEGACY_REVIEW_FIELDS, ASK_BEFORE_SAVE, askSteps,
   dailyTally, runningTallies, tallyText, winLossText, tallyLabel, shiftDayKey, roleRecords, reviewEntries, latestNextMove,
-  buildBackup, parseBackup, backupStatus, statsScope, sessionElapsedStats, winRateHold, splitHeroInput, triedStats, triedSinceLastMatch, isAskEmpty, buildDraft, restoreDraft,
+  buildBackup, parseBackup, backupStatus, statsScope, sessionElapsedStats, winRateHold, splitHeroInput, triedStats, triedSinceLastMatch, currentLossStreak, isAskEmpty, buildDraft, restoreDraft,
 } from './logic.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -64,7 +64,7 @@ const state = {
   display: { ...DISPLAY_DEFAULTS }, // 表示の設定(config.js の DISPLAY_META_KEY)
   // listDay: 履歴で見ている1日(null は今日)。sel: 問いかけ入力で選んでいる候補・段階の位置(-1 は選んでいない)
   // historyMode: 履歴の表示('review' まとめ / 'games' 試合一覧。開いたときはまとめ)。reviewResult・reviewHero: 振り返りの絞り込み('all' はすべて)
-  ui: { listDay: null, sel: -1, browseGroup: null, browseSel: 0, browseByInput: false, saving: false, typed: null, keysOpen: false, resumed: false, pausedUntil: 0, welcome: false, historyMode: 'review', reviewResult: 'all', reviewHero: 'all' },
+  ui: { listDay: null, sel: -1, browseGroup: null, browseSel: 0, browseByInput: false, saving: false, typed: null, keysOpen: false, resumed: false, pausedUntil: 0, welcome: false, quickMatch: null, historyMode: 'review', reviewResult: 'all', reviewHero: 'all' },
   timer: { startedAt: null, clicks: 0, keys: 0 }, // clicks = 候補などを押した回数、keys = Enter・数字キーで決めた回数
 };
 
@@ -190,6 +190,7 @@ function showView() {
 
 function bindEvents() {
   bindAsk();
+  bindQuickWin();
   bindKeyboard();
 
   // 「?」の解説: 押すと出し、もう一度押すかほかを押すと消す(カーソルを合わせられないスマホでも見られる。設計書 画面設計)
@@ -359,7 +360,7 @@ function stepDef(id) {
   }
   if (id === 'map') {
     return {
-      kind: 'pick', short: 'マップ', q: 'マップは?', sub: `英語の名前のほか、いりおす・イリオス・iriosu でも打てます。${pickHow()}`,
+      kind: 'pick', optional: true, short: 'マップ', q: 'マップは?(任意)', sub: `空のまま Enter でとばせます。英語の名前のほか、いりおす・イリオス・iriosu でも打てます。${pickHow()}`,
       example: 'ilios', items: state.master.maps,
       browseKey: 'map', browseTitle: 'マップを選ぶ', browseOpenLabel: 'マップ一覧を開く', browseSwitchLabel: 'モード切替',
       // マップは連続で同じものが来にくいため「最近」は出さず、控えめなリンク・map入力・/ / Ctrl+Space で一覧オーバーレイを開く(設計書 F1)
@@ -375,7 +376,7 @@ function stepDef(id) {
   }
   if (id === 'hero') {
     return {
-      kind: 'pick', short: 'ヒーロー', q: '使ったヒーローは?', sub: `ロールはヒーローから決まります。答えると試合を保存します。${pickHow()}\n2人以上は空白で区切って打てます(tracer genji)`,
+      kind: 'pick', optional: true, short: 'ヒーロー', q: '使ったヒーローは?(任意)', sub: `空のまま Enter でとばせます。答えるか飛ばすと DEFEAT として試合を保存します。${pickHow()}\n2人以上は空白で区切って打てます(tracer genji)`,
       example: 'tracer', items: state.master.heroes,
       browseKey: 'hero', browseTitle: 'ヒーローを選ぶ', browseOpenLabel: 'ヒーロー一覧を開く', browseSwitchLabel: 'ロール切替',
       // 空欄のときは「最近」を出し、その下の固定位置のリンク・hero入力・/ / Ctrl+Space で一覧オーバーレイを開く(設計書 F2)
@@ -390,7 +391,7 @@ function stepDef(id) {
       color: (x) => `var(--role-${x.role})`, firstSelected: true,
     };
   }
-  const f = fieldOf(id, state.ask.answers.result);
+  const f = fieldOf(id, state.ask.answers.result ?? 'loss');
   const sub = f.sub ?? '自分の行動で書くと?';
   return { kind: 'text', short: f.short(reviewHero(askHeroIds())), q: f.label(reviewHero(askHeroIds())), sub, example: f.example };
 }
@@ -535,7 +536,7 @@ function undoAskSave() {
   undoSave(state.ask.matchId, { ...state.ask.answers });
 }
 
-// 次の問いへ。保存する前は、まだ答えていない問いへ進み、必須の4つがそろったら保存する
+// 次の問いへ。保存する前は負けメインの3問(気持ち → マップ → ヒーロー。すべて任意)を順に進み、ヒーローの次で DEFEAT として保存する
 async function askNext() {
   const steps = askStepsNow();
   const i = steps.indexOf(state.ask.step);
@@ -545,16 +546,12 @@ async function askNext() {
     return;
   }
   state.ask.seen.add(state.ask.step);
-  const a = state.ask.answers;
-  const missing = (id) => (id === 'memo' ? !state.ask.seen.has(id) : !askAnswer(id));
-  // すぐ次の問いへ1問ずつ進む(答えてある問いもとばさない。戻って直したとき、直したい問いを通り過ぎないため)。
-  // 最後の問いの後だけ、まだ答えていない問いへ戻る
-  const next = ASK_BEFORE_SAVE[i + 1] ?? ASK_BEFORE_SAVE.find((id) => id !== 'memo' && missing(id));
+  const next = ASK_BEFORE_SAVE[i + 1];
   if (next) {
     goAsk(next);
     return;
   }
-  if (a.result && a.skillGap && a.mapId && a.heroId) await saveAskMatch();
+  await saveAskMatch();
 }
 
 // 最後の問いを終えたら、次の試合の最初の問いに戻る
@@ -725,9 +722,9 @@ async function saveAskMatch() {
 
 async function saveAskMatchNow() {
   const a = state.ask.answers;
+  const result = a.result || 'loss';
   const heroIds = askHeroIds().filter((x) => state.heroById.has(x));
-  const hero = state.heroById.get(heroIds[0]);
-  if (!a.result || !a.skillGap || !a.mapId || !hero) return;
+  const hero = state.heroById.get(heroIds[0]) ?? null;
   const now = new Date();
   const startedAt = state.timer.startedAt ?? now.getTime();
   const match = {
@@ -735,10 +732,10 @@ async function saveAskMatchNow() {
     createdAt: now.toISOString(),
     date: dayKeyOf(now),
     timeSlot: timeSlotOf(now).id,
-    role: hero.role, // ロールは1人目のヒーローのロール(設計書 F3。同じ試合でロールは混ざらない)
-    mapId: a.mapId,
-    result: a.result,
-    skillGap: a.skillGap,
+    role: hero?.role ?? null, // ロールは1人目のヒーローのロール。ヒーローを飛ばした場合は null(設計書 F2・F3)
+    mapId: a.mapId ?? null,
+    result,
+    skillGap: a.skillGap ?? null,
     inputSeconds: Math.round((now.getTime() - startedAt) / 100) / 10,
     clickCount: state.timer.clicks,
     keyCount: state.timer.keys,
@@ -757,12 +754,13 @@ async function saveAskMatchNow() {
   await reload();
   queueAutoSave();
   renderToday();
-  bumpToday(a.result, hero.role);
-  const snapshot = { ...a };
+  bumpToday(result, hero?.role ?? null);
+  const snapshot = { ...a, result };
+  state.ask.answers.result = result;
   state.ask.matchId = match.id;
   state.timer = { startedAt: null, clicks: 0, keys: 0 };
   // 振り返りの問いへ進む
-  const next = askSteps(a.result)[ASK_BEFORE_SAVE.length];
+  const next = askSteps(result)[ASK_BEFORE_SAVE.length];
   // ヒーローを Enter で決めたあとの連打・押しっぱなしで、振り返りが空のままとばされないよう、1問目に進んだ直後も少しのあいだ決める操作を受けない
   if (next) {
     state.ui.pausedUntil = Date.now() + FINISH_PAUSE_MS;
@@ -770,10 +768,140 @@ async function saveAskMatchNow() {
   } else finishAsk();
   // 入力時間とクリック数・今日の勝敗は保存するが、ここには出さない(急かさない。設計書 敗北直後の見せ方)。
   // 押し間違いは「取り消す」で戻せる。トーストが消えた後も、振り返りのあいだは「保存を取り消す」と、1問目の空の ← で戻せる。
-  toast(savedSign(a.result), {
+  toast(savedSign(result), {
     ms: SAVED_MS,
     action: { label: '保存を取り消す', run: () => undoSave(match.id, snapshot) },
   });
+}
+
+// ---------- 勝ち・引き分け専用バー(設計書「簡易入力の設計」案A) ----------
+// 1タップで即保存し、その場で「次に試すこと・反省点」1問だけ任意で書ける。
+function bindQuickWin() {
+  $('#quick-win').addEventListener('click', () => quickSaveResult('win'));
+  $('#quick-draw').addEventListener('click', () => quickSaveResult('draw'));
+  $('#win-after-save').addEventListener('click', commitQuickWin);
+  $('#win-after-close').addEventListener('click', closeQuickWin);
+  $('#win-after-undo').addEventListener('click', undoQuickWin);
+  const input = $('#win-after-input');
+  input.addEventListener('input', () => {
+    const empty = !input.value.trim();
+    const btn = $('#win-after-save');
+    btn.textContent = empty ? 'とばす' : '保存';
+    btn.classList.toggle('skip', empty);
+    renderTextCount($('#win-after-count'), input.value.length);
+    input.style.height = 'auto';
+    input.style.height = `${Math.max(input.scrollHeight, 32)}px`;
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229 || e.altKey || e.metaKey || e.ctrlKey) return;
+    if (e.key === 'Escape') { e.preventDefault(); closeQuickWin(); return; }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commitQuickWin(); }
+  });
+}
+
+async function quickSaveResult(result) {
+  if (state.ui.saving) return;
+  state.ui.saving = true;
+  try {
+    const now = new Date();
+    const match = {
+      id: newId(),
+      createdAt: now.toISOString(),
+      date: dayKeyOf(now),
+      timeSlot: timeSlotOf(now).id,
+      role: null,
+      mapId: null,
+      result,
+      skillGap: null,
+      inputSeconds: 0,
+      clickCount: 1,
+      keyCount: 0,
+    };
+    await db.saveMatch({
+      match,
+      ...childRows(match.id, { heroIds: [], banned: false, bans: new Map(), allyComp: null, enemyComp: null }),
+      review: null,
+    });
+    await reload();
+    queueAutoSave();
+    renderToday();
+    bumpToday(result, null);
+    state.ui.quickMatch = { id: match.id, result };
+    const input = $('#win-after-input');
+    input.value = '';
+    input.style.height = 'auto';
+    $('#win-after-save').textContent = 'とばす';
+    $('#win-after-save').classList.add('skip');
+    renderTextCount($('#win-after-count'), 0);
+    renderQuickWin();
+    renderAsk({ focus: false });
+    if (!$('#view-home').hidden && !$('#match-dialog').open) input.focus();
+    toast(savedSign(result), {
+      ms: SAVED_MS,
+      action: { label: '保存を取り消す', run: () => undoQuickMatchById(match.id) },
+    });
+  } catch (e) {
+    toast(`保存できませんでした: ${e?.message ?? e}`);
+  } finally {
+    state.ui.saving = false;
+  }
+}
+
+async function commitQuickWin() {
+  const qm = state.ui.quickMatch;
+  if (!qm) return;
+  const text = $('#win-after-input').value.trim();
+  if (text) {
+    try {
+      await saveReview(qm.id, { nextMove: text });
+    } catch (e) {
+      toast(`保存できませんでした: ${e?.message ?? e}`);
+      return;
+    }
+  }
+  closeQuickWin();
+  if (text) toast('次に試すことを保存しました');
+}
+
+function closeQuickWin() {
+  if (!state.ui.quickMatch) return;
+  state.ui.quickMatch = null;
+  queueAutoSave({ download: true });
+  renderQuickWin();
+  renderAsk();
+}
+
+async function undoQuickWin() {
+  const qm = state.ui.quickMatch;
+  if (!qm) return;
+  await undoQuickMatchById(qm.id);
+}
+
+async function undoQuickMatchById(matchId) {
+  try {
+    await db.deleteMatch(matchId);
+  } catch (e) {
+    toast(`取り消せませんでした: ${e?.message ?? e}`);
+    return;
+  }
+  if (state.ui.quickMatch?.id === matchId) state.ui.quickMatch = null;
+  await reload();
+  queueAutoSave();
+  renderAll();
+  toast('保存を取り消しました');
+}
+
+function renderQuickWin() {
+  const qm = state.ui.quickMatch;
+  const inLossReview = !!state.ask.matchId;
+  $('#win-strip').hidden = !!qm || inLossReview;
+  const after = $('#win-after');
+  after.hidden = !qm;
+  if (qm) {
+    const tag = $('#win-after-tag');
+    tag.textContent = qm.result === 'win' ? '★ VICTORY を保存しました' : 'DRAW を保存しました';
+    tag.classList.toggle('is-draw', qm.result !== 'win');
+  }
 }
 
 // 保存の合図(設計書「簡易入力の設計」)。保存直後のトーストに、結果のアイコンと結果名と一言を出す。
@@ -962,7 +1090,7 @@ async function toggleTried() {
 function renderAskProgress(total, i) {
   const before = ASK_BEFORE_SAVE.length;
   const review = i >= before;
-  const [name, count, at] = review ? ['振り返り', total - before, i - before] : ['記録', before, i];
+  const [name, count, at] = review ? ['振り返り', total - before, i - before] : ['負けた試合', before, i];
   const dots = h('span', { class: 'step-dots' },
     Array.from({ length: count }, (_, k) => h('i', { class: k < at ? 'on' : k === at ? 'now' : '' })));
   const el = $('#ask-step');
@@ -972,13 +1100,22 @@ function renderAskProgress(total, i) {
     review ? [h('span', { class: 'step-group done' },
       svg('svg', { viewBox: '0 0 12 12', width: 12, height: 12, fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' },
         svg('path', { d: 'M2.5 6.5l2.2 2.2L9.5 3.5' })),
-      '記録'), h('span', { class: 'step-sep' })] : null,
+      '負けた試合'), h('span', { class: 'step-sep' })] : null,
     h('span', { class: 'step-group' }, name, dots));
 }
 
 function renderAsk({ focus = true } = {}) {
   // 「はじめての方へ」は、開いたときに記録が0件なら出す。保存しても消さず、次に開いたときから出さない(入力欄が跳ばないように。設計書 画面設計)
   $('#welcome').hidden = !state.ui.welcome;
+  renderQuickWin();
+  // 3連敗以上のとき、負けメインの問いかけ入力の上部に慰めの1行を出す(2026-11-26 ユーザー指定)
+  const streak = currentLossStreak(state.matches);
+  const comfortEl = $('#ask-comfort');
+  const showComfort = streak >= 3 && !state.ask.matchId;
+  comfortEl.hidden = !showComfort;
+  if (showComfort) {
+    comfortEl.textContent = `${streak}連敗中です。まずは頭の中のモヤモヤをそのまま吐き出して、ひと息つきましょう。`;
+  }
   renderPrevImprovement();
   const steps = askStepsNow();
   const id = state.ask.step;
@@ -1029,7 +1166,7 @@ function renderAsk({ focus = true } = {}) {
   $('#reset-form').hidden = !!state.ask.matchId;
   $('#undo-save').hidden = !state.ask.matchId;
   growAsk();
-  if (focus && !$('#view-home').hidden && !$('#match-dialog').open) input.focus();
+  if (focus && !state.ui.quickMatch && !$('#view-home').hidden && !$('#match-dialog').open) input.focus();
 }
 
 // 使えるキーの説明。主な3つを出し、残りは「ほかのキー操作」で開く(設計書「簡易入力の設計」)
