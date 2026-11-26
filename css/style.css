@@ -428,7 +428,9 @@ textarea { width: 100%; }
 .win-after-head-actions { display: flex; align-items: center; gap: var(--s3); font-size: var(--fs-sm); }
 .ask-comfort {
   margin: 0; padding: var(--s2) var(--s3);
-  background: var(--loss-soft); border-left: 3px solid var(--loss); border-radius: var(--r-sm);
+  background: var(--loss-soft);
+  border: 1px solid color-mix(in srgb, var(--loss) 30%, transparent);
+  border-radius: var(--r-sm);
   font-size: var(--fs-sm); color: var(--loss-text);
 }
 .ask-comfort[hidden] { display: none; }
