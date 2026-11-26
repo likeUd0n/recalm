@@ -46,6 +46,21 @@ test('5試合の試合ごとの累計(手書きの「Tank:1-2」の行にあた�
   assert.equal(text('m5'), 'Tank:0-1'); // 0:00 を過ぎたので累計はリセット
 });
 
+test('ロールなしの勝利は「ロール不明」ではなく「勝利」区分にまとめる', () => {
+  const ms = [
+    match('w1', at(2026, 11, 26, 20, 0), null, 'win'),
+    match('w2', at(2026, 11, 26, 20, 20), null, 'win'),
+    match('l1', at(2026, 11, 26, 20, 40), null, 'loss'),
+    match('t1', at(2026, 11, 26, 21, 0), 'tank', 'loss'),
+  ];
+  assert.deepEqual(dailyTally(ms, '2026-11-26').map((t) => tallyText(t)), ['Tank 0-1', '勝利 2-0', 'ロール不明 0-1']);
+  const running = runningTallies(ms);
+  assert.equal(tallyText(running.get('w1'), ':'), '勝利:1-0');
+  assert.equal(tallyText(running.get('w2'), ':'), '勝利:2-0');
+  assert.equal(tallyText(running.get('l1'), ':'), 'ロール不明:0-1');
+  assert.deepEqual(roleRecords(ms).map((t) => `${t.key}:${t.wins}-${t.losses}`), ['win:2-0', 'tank:0-1', ':0-1']);
+});
+
 test('入力順に並んでいなくても、入力時刻の順で数える', () => {
   const running = runningTallies([...five].reverse());
   assert.equal(tallyText(running.get('m3'), ':'), 'Tank:1-1');

@@ -10,7 +10,7 @@ import {
 import {
   dayKeyOf, jstParts, timeSlotOf, timeSlotRangeText, matchTimeTags, matchesNeedingUpdate, recentMapIds,
   heroUsage, orderByRecent, searchByName, LOSS_REVIEW_FIELDS, WIN_REVIEW_FIELDS, DRAW_REVIEW_FIELDS, LEGACY_REVIEW_FIELDS, ASK_BEFORE_SAVE, askSteps,
-  dailyTally, runningTallies, tallyText, winLossText, tallyLabel, shiftDayKey, roleRecords, reviewEntries, latestNextMove,
+  dailyTally, runningTallies, tallyKey, tallyText, winLossText, tallyLabel, shiftDayKey, roleRecords, reviewEntries, latestNextMove,
   buildBackup, parseBackup, backupStatus, statsScope, sessionElapsedStats, winRateHold, splitHeroInput, triedStats, triedSinceLastMatch, currentLossStreak, isAskEmpty, buildDraft, restoreDraft,
 } from './logic.js';
 
@@ -883,7 +883,7 @@ function savedSign(result) {
 function bumpToday(result, role) {
   // 「試合数だけ」では試合数を弾ませる(設計書 F3)
   const cls = state.display.today === 'count' ? 'n' : SCORE_CLASS[result];
-  $(`#today-chip .tally-role[data-role="${role ?? ''}"] .${cls}`)?.classList.add('bump');
+  $(`#today-chip .tally-role[data-role="${tallyKey({ result, role })}"] .${cls}`)?.classList.add('bump');
 }
 
 // 保存の取り消し(設計書 押し間違いへの備え)。試合を消し、答えを問いかけ入力に戻してヒーローの問いを開く。
@@ -1492,6 +1492,8 @@ const ROLE_SHAPES = {
     svg('path', { d: `M${x} 18.2V4.6c0-2.1 2-3.9 2.5-3.9s2.5 1.8 2.5 3.9v13.6zM${x} 19.6h5v3.8h-5z` })),
   // 十字
   support: () => [svg('path', { d: 'M9.5 3h5v6.5H21v5h-6.5V21h-5v-6.5H3v-5h6.5z' })],
+  // 王冠(ロールを記録しない勝利の区分。設計書 F3)
+  win: () => [svg('path', { d: 'M3 8l4.5 4L12 5l4.5 7L21 8l-2 10H5z' })],
 };
 
 function roleIcon(roleId, size = 20) {

@@ -55,7 +55,8 @@ export const SUBROLE_NOTE = '厳密な区別ではなく、見やすさをよく
 export const SUBROLE_OTHER = { id: 'other', label: '未分類' };
 
 // 試合のモード(Ranked・Quick)は記録しない(2026-10-19 に廃止、設計書 F3)。累計勝敗はロール別に出す。
-// ロールのない以前の記録をまとめる区分の名前。
+// ロールを記録しない勝利(簡易入力の勝ち記録など)をまとめる区分と、ロールのない負け・引き分けをまとめる区分の名前。
+export const WIN_TALLY_LABEL = '勝利';
 export const UNKNOWN_ROLE_LABEL = 'ロール不明';
 
 // 1日の区切り(時)。0:00〜24:00 を1日とする(暦の日付と同じ。2026-10-19 に4:00区切りから変更、設計書 F3)。

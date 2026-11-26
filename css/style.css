@@ -364,6 +364,7 @@ textarea { width: 100%; }
 .role-icon.role-tank { color: var(--role-tank); }
 .role-icon.role-damage { color: var(--role-damage); }
 .role-icon.role-support { color: var(--role-support); }
+.role-icon.role-win { color: var(--win); }
 
 .small-note { font-size: var(--fs-sm); margin: var(--s1) 0 var(--s2); }
 .autosave-title { margin-top: var(--s4); }
@@ -401,6 +402,7 @@ textarea { width: 100%; }
 /* ---------- 負けた / 勝った切替と連敗時の慰め(設計書「簡易入力の設計」) ---------- */
 .ask-mode-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); }
 .ask-mode-row[hidden] { display: none; }
+.ask-mode button { display: inline-flex; align-items: center; justify-content: center; padding: 6px var(--s3); }
 .ask-mode button[data-ask-mode="loss"][aria-pressed="true"] { color: var(--loss-text); }
 .ask-mode button[data-ask-mode="win"][aria-pressed="true"] { color: var(--win-text); }
 .ask-mode-hint { font-size: var(--fs-sm); }

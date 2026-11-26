@@ -1,6 +1,6 @@
 // 画面に依存しない計算。後で node --test から読み込めるよう DOM を使わない。
 import {
-  TIME_SLOTS, PEAK_SLOT_IDS, ROLES, UNKNOWN_ROLE_LABEL, DAY_START_HOUR,
+  TIME_SLOTS, PEAK_SLOT_IDS, ROLES, WIN_TALLY_LABEL, UNKNOWN_ROLE_LABEL, DAY_START_HOUR,
   BACKUP_STORES, BACKUP_STALE_DAYS, DEVICE_META_KEYS, REFERENCE_MIN_GAMES,
   SKILL_GAPS, SKILL_GAP_ALIASES, DRAFT_MAX_AGE_HOURS,
   SESSION_GAP_MINUTES, SESSION_ELAPSED_STEP_MINUTES,
@@ -56,18 +56,20 @@ export function matchesNeedingUpdate(matches) {
     .map(([, b]) => b);
 }
 
-// 累計勝敗をまとめる区分。ロール別(ロールのない以前の記録は空文字の区分にまとめる)。
-function tallyKey(m) {
-  return m.role ?? '';
+// 累計勝敗をまとめる区分。ロール別。ロールを記録しない勝利は 'win'、ロールのない負け・引き分けは空文字にまとめる(設計書 F3)。
+export function tallyKey(m) {
+  if (m.role) return m.role;
+  return m.result === 'win' ? 'win' : '';
 }
 
-// 区分の表示名。ロール名か、「ロール不明」。
+// 区分の表示名。ロール名、「勝利」、または「ロール不明」。
 export function tallyLabel(key) {
+  if (key === 'win') return WIN_TALLY_LABEL;
   return ROLES.find((r) => r.id === key)?.label ?? UNKNOWN_ROLE_LABEL;
 }
 
-// 区分の並び順: Tank, DPS, Support, ロール不明。
-const TALLY_ORDER = [...ROLES.map((r) => r.id), ''];
+// 区分の並び順: Tank, DPS, Support, 勝利, ロール不明。
+const TALLY_ORDER = [...ROLES.map((r) => r.id), 'win', ''];
 
 // 試合ごとに、その1日(0:00区切り)の同じ区分での累計勝敗(その試合を含む)を返す。
 // 戻り値は Map<matchId, { key, wins, losses, draws }>。
