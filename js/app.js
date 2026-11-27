@@ -1465,7 +1465,7 @@ function bindAsk() {
       const atEnd = input.selectionStart === input.value.length && input.selectionEnd === input.value.length;
       if (!empty && def.kind === 'pick' && atEnd) {
         const hi = heroInput(state.ui.typed ?? input.value);
-        if (state.ui.typed !== null) {
+        if (state.ui.typed !== null || def.items?.some((x) => x.name === input.value)) {
           e.preventDefault();
           const head = hi?.head ?? '';
           input.value = head ? `${head} ` : '';
