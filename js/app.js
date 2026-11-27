@@ -1197,7 +1197,7 @@ function renderAskKeys(def, has) {
     def.browseKey ? [[k(def.browseKey)], ` と打って${def.browseOpenLabel}`] : null,
     !state.ask.matchId && state.ask.step === 'memo' ? [['空で ', k('Tab')], '負けた / 勝った を切り替える'] : null,
     has && def.kind === 'text' ? [['空で ', k('Shift'), '+', k('Tab')], 'いまの答えを書き直す'] : null,
-    def.kind === 'pick' ? [[k('Delete')], '変換済みの文字を一括削除'] : null,
+    def.kind === 'pick' ? [[k('Backspace'), ' / ', k('Delete')], '変換済みの文字を一括削除'] : null,
     has ? [['空で ', k('Delete')], 'いまの答えを消す(空なら前へ)'] : null,
     [['空で ', k('Delete'), ' / ', k('←'), ' / ', k('Backspace')], undo ? '保存を取り消して、ヒーローの問いに戻る' : '前の問いへ'],
     [['空で ', k('→')], '次の問いへ'],
@@ -1454,20 +1454,37 @@ function bindAsk() {
       renderAskKeys(def, !!askAnswer(state.ask.step));
       return;
     }
-    // Delete: 選択の問いで変換済み(またはカーソル末尾)なら1回で一括削除、空欄ならいまの答えを消して空なら前の問いへ(設計書「簡易入力の設計」)
-    if (e.key === 'Delete') {
-      if (empty) {
+    // Backspace / Delete: 選択の問いで変換済み・確定済みの語を1回で一括削除(複数ヒーローは末尾の1人ずつ)。空欄の Delete はいまの答えを消して空なら前の問いへ(設計書「簡易入力の設計」)
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      if (e.key === 'Delete' && empty) {
         e.preventDefault();
         if (askAnswer(state.ask.step)) clearAnswer(state.ask.step);
         else askBack({ repeat: e.repeat });
         return;
       }
       const atEnd = input.selectionStart === input.value.length && input.selectionEnd === input.value.length;
-      if (def.kind === 'pick' && (state.ui.typed !== null || atEnd)) {
-        e.preventDefault();
-        input.value = '';
-        input.dispatchEvent(new Event('input'));
-        return;
+      if (!empty && def.kind === 'pick' && atEnd) {
+        const hi = heroInput(state.ui.typed ?? input.value);
+        if (state.ui.typed !== null) {
+          e.preventDefault();
+          const head = hi?.head ?? '';
+          input.value = head ? `${head} ` : '';
+          input.dispatchEvent(new Event('input'));
+          return;
+        }
+        if (hi && hi.ids.length > 0 && !hi.query) {
+          e.preventDefault();
+          const rest = hi.ids.slice(0, -1);
+          input.value = rest.length ? `${rest.map(heroName).join(' ')} ` : '';
+          input.dispatchEvent(new Event('input'));
+          return;
+        }
+        if (e.key === 'Delete') {
+          e.preventDefault();
+          input.value = '';
+          input.dispatchEvent(new Event('input'));
+          return;
+        }
       }
     }
     // 入力欄が空のときだけ、← と Backspace で前の問いへ、→ で次の問いへ(答えてある問いだけ)
