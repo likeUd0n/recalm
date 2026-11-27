@@ -79,11 +79,14 @@ export const AUTOSAVE_FILE = 'recalm-backup.json';
 export const AUTOSAVE_DELAY_MS = 2000;
 // フォルダを選べないブラウザ(Firefox など)の、記録のたびの自動ダウンロード。{ enabled, lastAt } を持つ meta のキー
 export const AUTODOWNLOAD_META_KEY = 'autoDownload';
-// 表示の設定(設計書 画面設計 設定)。{ today } を持つ meta のキー。記録と一緒にバックアップに含める。
+// 表示の設定(設計書 画面設計 設定)。{ today, theme } を持つ meta のキー。記録と一緒にバックアップに含める。
 // today: メニューバーと集計の今日の表示('count' 試合数だけ / 'record' 勝敗 / 'none' 出さない)。
 // 初期値は目的(感情的にならずに楽しむ)に合わせる(2026-11-09)。以前の stats(集計の並び順)は 2026-11-21 に外した。
 export const DISPLAY_META_KEY = 'display';
-export const DISPLAY_DEFAULTS = { today: 'count' };
+// theme: 画面の色('dark' 暗い / 'light' 明るい)。初期は暗い(2026-11-27「夜の手帳」)。
+export const DISPLAY_DEFAULTS = { today: 'count', theme: 'dark' };
+// 画面の色を、IndexedDB を読む前(最初の描画)と about.html でも当てるために写しておく localStorage のキー
+export const THEME_STORAGE_KEY = 'recalm-theme';
 // 書き出しにも取り込みにも含めない meta のキー
 export const DEVICE_META_KEYS = [BACKUP_META_KEY, AUTOSAVE_META_KEY, AUTODOWNLOAD_META_KEY];
 

@@ -7,6 +7,8 @@
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <link rel="stylesheet" href="css/style.css">
+  <!-- 画面の色(設計書 画面設計「夜の手帳」)。最初の描画から明るい画面で出せるよう、CSS の直後に当てる -->
+  <script>try { if (localStorage.getItem('recalm-theme') === 'light') document.documentElement.dataset.theme = 'light'; } catch { /* 読めなければ暗い画面 */ }</script>
 </head>
 <body>
   <!-- 人に試してもらうとき最初に読んでもらう説明ページ。URL をそのまま送れるよう、アプリとは別のページにする(設計書 画面設計) -->

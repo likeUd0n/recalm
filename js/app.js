@@ -4,7 +4,7 @@ import {
   RESULT_LABELS, ROLES,
   DELETED_LABELS, SKILL_GAPS, SKILL_GAP_ALIASES, TIME_SLOTS,
   BACKUP_STORES, BACKUP_META_KEY, BACKUP_STALE_DAYS, REFERENCE_MIN_GAMES, DRAFT_KEY, TOUR_KEY, FINISH_PAUSE_MS,
-  AUTOSAVE_META_KEY, AUTOSAVE_FILE, AUTOSAVE_DELAY_MS, AUTODOWNLOAD_META_KEY, DEVICE_META_KEYS, DISPLAY_META_KEY, DISPLAY_DEFAULTS,
+  AUTOSAVE_META_KEY, AUTOSAVE_FILE, AUTOSAVE_DELAY_MS, AUTODOWNLOAD_META_KEY, DEVICE_META_KEYS, DISPLAY_META_KEY, DISPLAY_DEFAULTS, THEME_STORAGE_KEY,
   SESSION_GAP_MINUTES, SESSION_ELAPSED_STEP_MINUTES,
 } from './config.js';
 import {
@@ -109,6 +109,7 @@ async function start() {
   state.lastBackupAt = (await db.get('meta', BACKUP_META_KEY))?.value ?? null;
   state.autoDownload = { ...state.autoDownload, ...(await db.get('meta', AUTODOWNLOAD_META_KEY))?.value };
   state.display = { ...DISPLAY_DEFAULTS, ...(await db.get('meta', DISPLAY_META_KEY))?.value };
+  applyTheme();
   const dir = (await db.get('meta', AUTOSAVE_META_KEY))?.value ?? null;
   if (dir?.queryPermission) {
     state.autoSave = { dir, granted: (await dir.queryPermission({ mode: 'readwrite' }).catch(() => 'denied')) === 'granted' };
@@ -209,6 +210,7 @@ function bindEvents() {
   $('#autosave-stop').addEventListener('click', stopAutoSave);
   $('#autodl-enabled').addEventListener('change', (e) => setAutoDownload(e.target.checked));
   for (const r of document.querySelectorAll('input[name="pref-today"]')) r.addEventListener('change', () => setDisplay('today', r.value));
+  for (const r of document.querySelectorAll('input[name="pref-theme"]')) r.addEventListener('change', () => setDisplay('theme', r.value));
   $('#prev-imp-try').addEventListener('click', toggleTried);
   $('#card-tried').addEventListener('click', () => toggleStatsDetail('tried'));
   $('#card-hold').addEventListener('click', () => toggleStatsDetail('session'));
@@ -2157,6 +2159,7 @@ function renderEditor(m, model, original) {
 
 function renderSettings() {
   for (const r of document.querySelectorAll('input[name="pref-today"]')) r.checked = r.value === state.display.today;
+  for (const r of document.querySelectorAll('input[name="pref-theme"]')) r.checked = r.value === state.display.theme;
   renderBackup();
   renderAutoSave();
 }
@@ -2317,8 +2320,16 @@ async function setDisplay(key, value) {
   } catch (e) {
     toast(`設定を保存できませんでした: ${e?.message ?? e}`);
   }
+  applyTheme();
   renderToday();
   queueAutoSave();
+}
+
+// 画面の色(設計書 画面設計「夜の手帳」)。初期は暗い。about.html でも同じ色で開けるよう、ブラウザ内の localStorage にも写す
+function applyTheme() {
+  const theme = state.display.theme === 'light' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = theme;
+  try { localStorage.setItem(THEME_STORAGE_KEY, theme); } catch { /* 保存できなくても表示は変える */ }
 }
 
 // ---------- 記録のたびの自動ダウンロード(F8。フォルダを選べないブラウザ) ----------
