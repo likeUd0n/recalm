@@ -4,14 +4,14 @@ import {
   RESULT_LABELS, ROLES,
   DELETED_LABELS, SKILL_GAPS, SKILL_GAP_ALIASES, TIME_SLOTS,
   BACKUP_STORES, BACKUP_META_KEY, BACKUP_STALE_DAYS, REFERENCE_MIN_GAMES, DRAFT_KEY, TOUR_KEY, FINISH_PAUSE_MS,
-  AUTOSAVE_META_KEY, AUTOSAVE_FILE, AUTOSAVE_DELAY_MS, AUTODOWNLOAD_META_KEY, DEVICE_META_KEYS, DISPLAY_META_KEY, DISPLAY_DEFAULTS,
+  AUTOSAVE_META_KEY, AUTOSAVE_FILE, AUTOSAVE_DELAY_MS, AUTODOWNLOAD_META_KEY, DEVICE_META_KEYS, DISPLAY_META_KEY, DISPLAY_DEFAULTS, THEME_STORAGE_KEY,
   SESSION_GAP_MINUTES, SESSION_ELAPSED_STEP_MINUTES,
 } from './config.js';
 import {
   dayKeyOf, jstParts, timeSlotOf, timeSlotRangeText, matchTimeTags, matchesNeedingUpdate, recentMapIds,
-  heroUsage, orderByRecent, searchByName, LOSS_REVIEW_FIELDS, WIN_REVIEW_FIELDS, DRAW_REVIEW_FIELDS, LEGACY_REVIEW_FIELDS, ASK_BEFORE_SAVE, askSteps,
-  dailyTally, runningTallies, tallyText, winLossText, tallyLabel, shiftDayKey, roleRecords, reviewEntries, latestNextMove,
-  buildBackup, parseBackup, backupStatus, statsScope, sessionElapsedStats, winRateHold, splitHeroInput, triedStats, triedSinceLastMatch, isAskEmpty, buildDraft, restoreDraft,
+  heroUsage, orderByRecent, searchByName, LOSS_REVIEW_FIELDS, WIN_REVIEW_FIELDS, DRAW_REVIEW_FIELDS, LEGACY_REVIEW_FIELDS, ASK_BEFORE_SAVE, ASK_WIN_BEFORE_SAVE, askSteps,
+  dailyTally, runningTallies, tallyKey, tallyText, winLossText, tallyLabel, shiftDayKey, roleRecords, reviewEntries, latestNextMove,
+  buildBackup, parseBackup, backupStatus, statsScope, sessionElapsedStats, winRateHold, splitHeroInput, triedStats, triedSinceLastMatch, currentLossStreak, isAskEmpty, buildDraft, restoreDraft,
 } from './logic.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -64,7 +64,7 @@ const state = {
   display: { ...DISPLAY_DEFAULTS }, // 表示の設定(config.js の DISPLAY_META_KEY)
   // listDay: 履歴で見ている1日(null は今日)。sel: 問いかけ入力で選んでいる候補・段階の位置(-1 は選んでいない)
   // historyMode: 履歴の表示('review' まとめ / 'games' 試合一覧。開いたときはまとめ)。reviewResult・reviewHero: 振り返りの絞り込み('all' はすべて)
-  ui: { listDay: null, sel: -1, browseGroup: null, browseSel: 0, browseByInput: false, saving: false, typed: null, keysOpen: false, resumed: false, pausedUntil: 0, welcome: false, historyMode: 'review', reviewResult: 'all', reviewHero: 'all' },
+  ui: { listDay: null, sel: -1, browseGroup: null, browseSel: 0, browseByInput: false, saving: false, typed: null, keysOpen: false, resumed: false, pausedUntil: 0, welcome: false, askMode: 'loss', historyMode: 'review', reviewResult: 'all', reviewHero: 'all' },
   timer: { startedAt: null, clicks: 0, keys: 0 }, // clicks = 候補などを押した回数、keys = Enter・数字キーで決めた回数
 };
 
@@ -109,6 +109,7 @@ async function start() {
   state.lastBackupAt = (await db.get('meta', BACKUP_META_KEY))?.value ?? null;
   state.autoDownload = { ...state.autoDownload, ...(await db.get('meta', AUTODOWNLOAD_META_KEY))?.value };
   state.display = { ...DISPLAY_DEFAULTS, ...(await db.get('meta', DISPLAY_META_KEY))?.value };
+  applyTheme();
   const dir = (await db.get('meta', AUTOSAVE_META_KEY))?.value ?? null;
   if (dir?.queryPermission) {
     state.autoSave = { dir, granted: (await dir.queryPermission({ mode: 'readwrite' }).catch(() => 'denied')) === 'granted' };
@@ -190,6 +191,7 @@ function showView() {
 
 function bindEvents() {
   bindAsk();
+  bindAskMode();
   bindKeyboard();
 
   // 「?」の解説: 押すと出し、もう一度押すかほかを押すと消す(カーソルを合わせられないスマホでも見られる。設計書 画面設計)
@@ -208,6 +210,7 @@ function bindEvents() {
   $('#autosave-stop').addEventListener('click', stopAutoSave);
   $('#autodl-enabled').addEventListener('change', (e) => setAutoDownload(e.target.checked));
   for (const r of document.querySelectorAll('input[name="pref-today"]')) r.addEventListener('change', () => setDisplay('today', r.value));
+  for (const r of document.querySelectorAll('input[name="pref-theme"]')) r.addEventListener('change', () => setDisplay('theme', r.value));
   $('#prev-imp-try').addEventListener('click', toggleTried);
   $('#card-tried').addEventListener('click', () => toggleStatsDetail('tried'));
   $('#card-hold').addEventListener('click', () => toggleStatsDetail('session'));
@@ -337,6 +340,12 @@ const pickHow = () => (isTouch() ? '候補を押して選びます' : '途中ま
 // 問いの中身。kind で入力欄の動きが変わる(text・pick)
 function stepDef(id) {
   if (id === 'memo') {
+    if (state.ui.askMode === 'win' && !state.ask.matchId) {
+      return {
+        kind: 'text', short: '反省点・次に試すこと', q: '反省点・次に試すことは?(任意)', sub: '空のまま Enter でとばせます',
+        example: '次の集団戦でも味方のタンクとタイミングを合わせて裏から入る。',
+      };
+    }
     return {
       kind: 'text', short: '気持ちの整理', q: 'いまの気持ちは?(任意)', sub: '先に書き出すと、落ち着いて振り返れます',
       example: '裏取りが全部読まれていてイライラした。でも最後の集団戦はうまく合わせられた。',
@@ -359,7 +368,7 @@ function stepDef(id) {
   }
   if (id === 'map') {
     return {
-      kind: 'pick', short: 'マップ', q: 'マップは?', sub: `英語の名前のほか、いりおす・イリオス・iriosu でも打てます。${pickHow()}`,
+      kind: 'pick', optional: true, short: 'マップ', q: 'マップは?(任意)', sub: `空のまま Enter でとばせます。英語の名前のほか、いりおす・イリオス・iriosu でも打てます。${pickHow()}`,
       example: 'ilios', items: state.master.maps,
       browseKey: 'map', browseTitle: 'マップを選ぶ', browseOpenLabel: 'マップ一覧を開く', browseSwitchLabel: 'モード切替',
       // マップは連続で同じものが来にくいため「最近」は出さず、控えめなリンク・map入力・/ / Ctrl+Space で一覧オーバーレイを開く(設計書 F1)
@@ -374,8 +383,9 @@ function stepDef(id) {
     };
   }
   if (id === 'hero') {
+    const resLabel = state.ui.askMode === 'win' && !state.ask.matchId ? 'VICTORY' : 'DEFEAT';
     return {
-      kind: 'pick', short: 'ヒーロー', q: '使ったヒーローは?', sub: `ロールはヒーローから決まります。答えると試合を保存します。${pickHow()}\n2人以上は空白で区切って打てます(tracer genji)`,
+      kind: 'pick', optional: true, short: 'ヒーロー', q: '使ったヒーローは?(任意)', sub: `空のまま Enter でとばせます。答えるか飛ばすと ${resLabel} として試合を保存します。${pickHow()}\n2人以上は空白で区切って打てます(tracer genji)`,
       example: 'tracer', items: state.master.heroes,
       browseKey: 'hero', browseTitle: 'ヒーローを選ぶ', browseOpenLabel: 'ヒーロー一覧を開く', browseSwitchLabel: 'ロール切替',
       // 空欄のときは「最近」を出し、その下の固定位置のリンク・hero入力・/ / Ctrl+Space で一覧オーバーレイを開く(設計書 F2)
@@ -390,7 +400,7 @@ function stepDef(id) {
       color: (x) => `var(--role-${x.role})`, firstSelected: true,
     };
   }
-  const f = fieldOf(id, state.ask.answers.result);
+  const f = fieldOf(id, state.ask.answers.result ?? 'loss');
   const sub = f.sub ?? '自分の行動で書くと?';
   return { kind: 'text', short: f.short(reviewHero(askHeroIds())), q: f.label(reviewHero(askHeroIds())), sub, example: f.example };
 }
@@ -421,7 +431,7 @@ function answerColor(id, v) {
   return null;
 }
 
-const askStepsNow = () => askSteps(state.ask.answers.result);
+const askStepsNow = () => (state.ui.askMode === 'win' && !state.ask.matchId ? ASK_WIN_BEFORE_SAVE : askSteps(state.ask.answers.result));
 const askInput = () => $('#ask-input');
 
 // 候補(pick の問い)。空のときは「最近」、打ったら名前か読みの一致するもの
@@ -445,11 +455,20 @@ function askCandidatesFor(def, q) {
   const recent = def.items === state.master.heroes ? heroUsage(state.matches, state.slots).recent
     : def.items === state.master.maps ? recentMapIds(state.matches) : [];
   const list = searchTyped(def.items, q, recent).slice(0, 8);
-  // map・hero(まっぷ・ひーろー も)を打つ途中なら、一覧を開く候補を最後に足す(設計書 F1・F2)
+  // map・hero(まっぷ・ひーろー も)を打つ途中なら、一覧を開く候補を先頭に出す(設計書 F1・F2)
   const cmd = toHiragana(q.trim().toLowerCase());
   return def.browseKey && cmd && browseKeys(def).some((k) => k.startsWith(cmd))
-    ? [...list, { id: BROWSE_CMD, name: def.browseKey, label: def.browseOpenLabel }]
+    ? [{ id: BROWSE_CMD, name: def.browseKey, label: def.browseOpenLabel }, ...list]
     : list;
+}
+
+// 候補リストの初期選択位置。先頭が一覧を開く候補なら、他の候補があるときは2番目(最初の実候補)を選ぶ
+function defaultPickSel(def, list) {
+  if (!list.length) return -1;
+  const hasBrowse = list[0].id === BROWSE_CMD;
+  const realCount = hasBrowse ? list.length - 1 : list.length;
+  if (!def.firstSelected && realCount !== 1 && list.length !== 1) return -1;
+  return hasBrowse && list.length > 1 ? 1 : 0;
 }
 
 // 一覧を開く入力: 英字の map・hero と、かなの まっぷ・ひーろー(カタカナはひらがなにそろえて比べる)
@@ -535,7 +554,7 @@ function undoAskSave() {
   undoSave(state.ask.matchId, { ...state.ask.answers });
 }
 
-// 次の問いへ。保存する前は、まだ答えていない問いへ進み、必須の4つがそろったら保存する
+// 次の問いへ。保存する前は負けメインの3問(気持ち → マップ → ヒーロー)、勝った時は2問(反省点・次に試すこと → ヒーロー)を進み、ヒーローの次で保存する
 async function askNext() {
   const steps = askStepsNow();
   const i = steps.indexOf(state.ask.step);
@@ -545,16 +564,14 @@ async function askNext() {
     return;
   }
   state.ask.seen.add(state.ask.step);
-  const a = state.ask.answers;
-  const missing = (id) => (id === 'memo' ? !state.ask.seen.has(id) : !askAnswer(id));
-  // すぐ次の問いへ1問ずつ進む(答えてある問いもとばさない。戻って直したとき、直したい問いを通り過ぎないため)。
-  // 最後の問いの後だけ、まだ答えていない問いへ戻る
-  const next = ASK_BEFORE_SAVE[i + 1] ?? ASK_BEFORE_SAVE.find((id) => id !== 'memo' && missing(id));
+  const before = state.ui.askMode === 'win' ? ASK_WIN_BEFORE_SAVE : ASK_BEFORE_SAVE;
+  const next = before[i + 1];
   if (next) {
     goAsk(next);
     return;
   }
-  if (a.result && a.skillGap && a.mapId && a.heroId) await saveAskMatch();
+  if (state.ui.askMode === 'win') await saveWinMatch();
+  else await saveAskMatch();
 }
 
 // 最後の問いを終えたら、次の試合の最初の問いに戻る
@@ -624,6 +641,29 @@ async function setAnswer(id, value) {
   await askNext();
 }
 
+// いまの問いの答えを消す(空欄での Delete。電卓方式。設計書「簡易入力の設計」)
+async function clearAnswer(id) {
+  if (state.ask.matchId && !ASK_BEFORE_SAVE.includes(id)) {
+    try {
+      await saveAskReview(id, '');
+    } catch (e) {
+      toast(`保存できませんでした: ${e?.message ?? e}`);
+      return;
+    }
+  } else if (id === 'hero') {
+    state.ask.answers.heroId = null;
+    state.ask.answers.otherHeroIds = [];
+  } else if (id === 'map') {
+    state.ask.answers.mapId = null;
+  } else if (id === 'memo') {
+    state.ask.answers.memo = '';
+  } else {
+    state.ask.answers[id] = null;
+  }
+  renderAsk();
+  saveDraft();
+}
+
 // 振り返りの答えを保存する
 async function saveAskReview(id, value) {
   await saveReview(state.ask.matchId, { [id]: value });
@@ -650,9 +690,19 @@ async function askCommit({ byKey = false } = {}) {
   // 1人目と違うロールのヒーローを打っているあいだは決めない(候補の下に理由を出している)
   if (hi?.blocked.length) return;
   const typing = hi ? !!hi.query : !!text;
-  const c = list[state.ui.sel] ?? (typing && (def.firstSelected || list.length === 1) ? list[0] : null);
+  const fallbackIdx = typing ? defaultPickSel(def, list) : -1;
+  const c = list[state.ui.sel] ?? (fallbackIdx >= 0 ? list[fallbackIdx] : null);
   if (c?.id === BROWSE_CMD) openBrowse({ byInput: true });
-  else if (c) await setAnswer(id, hi ? withHeadHeroes(c.id) : c.id);
+  // ヒーローの問いで候補を選んだときは即保存せず、入力欄へ追加して末尾に空白を入れ、複数ヒーローを続けて打てるようにする(設計書 F2)
+  else if (c && id === 'hero') {
+    const input = askInput();
+    input.value = `${withHeadHeroes(c.id).map(heroName).join(' ')} `;
+    state.ui.typed = null;
+    state.ui.sel = -1;
+    renderAskOpts();
+    growAsk();
+    queueDraft();
+  } else if (c) await setAnswer(id, c.id);
   // 「tracer 」のように区切りで終えたら、決まったヒーローだけで決める
   else if (hi?.ids.length && !hi.query) await setAnswer(id, hi.ids);
   else if (!text && has) await askNext();
@@ -725,9 +775,9 @@ async function saveAskMatch() {
 
 async function saveAskMatchNow() {
   const a = state.ask.answers;
+  const result = a.result || 'loss';
   const heroIds = askHeroIds().filter((x) => state.heroById.has(x));
-  const hero = state.heroById.get(heroIds[0]);
-  if (!a.result || !a.skillGap || !a.mapId || !hero) return;
+  const hero = state.heroById.get(heroIds[0]) ?? null;
   const now = new Date();
   const startedAt = state.timer.startedAt ?? now.getTime();
   const match = {
@@ -735,10 +785,10 @@ async function saveAskMatchNow() {
     createdAt: now.toISOString(),
     date: dayKeyOf(now),
     timeSlot: timeSlotOf(now).id,
-    role: hero.role, // ロールは1人目のヒーローのロール(設計書 F3。同じ試合でロールは混ざらない)
-    mapId: a.mapId,
-    result: a.result,
-    skillGap: a.skillGap,
+    role: hero?.role ?? null, // ロールは1人目のヒーローのロール。ヒーローを飛ばした場合は null(設計書 F2・F3)
+    mapId: a.mapId ?? null,
+    result,
+    skillGap: a.skillGap ?? null,
     inputSeconds: Math.round((now.getTime() - startedAt) / 100) / 10,
     clickCount: state.timer.clicks,
     keyCount: state.timer.keys,
@@ -757,12 +807,13 @@ async function saveAskMatchNow() {
   await reload();
   queueAutoSave();
   renderToday();
-  bumpToday(a.result, hero.role);
-  const snapshot = { ...a };
+  bumpToday(result, hero?.role ?? null);
+  const snapshot = { ...a, result };
+  state.ask.answers.result = result;
   state.ask.matchId = match.id;
   state.timer = { startedAt: null, clicks: 0, keys: 0 };
   // 振り返りの問いへ進む
-  const next = askSteps(a.result)[ASK_BEFORE_SAVE.length];
+  const next = askSteps(result)[ASK_BEFORE_SAVE.length];
   // ヒーローを Enter で決めたあとの連打・押しっぱなしで、振り返りが空のままとばされないよう、1問目に進んだ直後も少しのあいだ決める操作を受けない
   if (next) {
     state.ui.pausedUntil = Date.now() + FINISH_PAUSE_MS;
@@ -770,10 +821,87 @@ async function saveAskMatchNow() {
   } else finishAsk();
   // 入力時間とクリック数・今日の勝敗は保存するが、ここには出さない(急かさない。設計書 敗北直後の見せ方)。
   // 押し間違いは「取り消す」で戻せる。トーストが消えた後も、振り返りのあいだは「保存を取り消す」と、1問目の空の ← で戻せる。
-  toast(savedSign(a.result), {
+  toast(savedSign(result), {
     ms: SAVED_MS,
     action: { label: '保存を取り消す', run: () => undoSave(match.id, snapshot) },
   });
+}
+
+// ---------- 負けた / 勝った切替と勝ち1問保存(設計書「簡易入力の設計」) ----------
+function bindAskMode() {
+  $('#mode-loss').addEventListener('click', () => setAskMode('loss'));
+  $('#mode-win').addEventListener('click', () => setAskMode('win'));
+}
+
+function setAskMode(mode) {
+  if (state.ask.matchId || state.ui.askMode === mode) return;
+  state.ui.askMode = mode;
+  // 勝ちモードにはマップの問いがないため、マップに居た場合は先頭へ戻す
+  if (mode === 'win' && !ASK_WIN_BEFORE_SAVE.includes(state.ask.step)) state.ask.step = 'memo';
+  renderAsk();
+}
+
+async function saveWinMatch() {
+  if (state.ui.saving) return;
+  state.ui.saving = true;
+  try {
+    const a = state.ask.answers;
+    const heroIds = askHeroIds().filter((x) => state.heroById.has(x));
+    const hero = state.heroById.get(heroIds[0]) ?? null;
+    const now = new Date();
+    const startedAt = state.timer.startedAt ?? now.getTime();
+    const match = {
+      id: newId(),
+      createdAt: now.toISOString(),
+      date: dayKeyOf(now),
+      timeSlot: timeSlotOf(now).id,
+      role: hero?.role ?? null,
+      mapId: null,
+      result: 'win',
+      skillGap: null,
+      inputSeconds: Math.round((now.getTime() - startedAt) / 100) / 10,
+      clickCount: state.timer.clicks,
+      keyCount: state.timer.keys,
+    };
+    const nextMove = (a.memo ?? '').trim();
+    await db.saveMatch({
+      match,
+      ...childRows(match.id, { heroIds, banned: false, bans: new Map(), allyComp: null, enemyComp: null }),
+      review: nextMove ? { matchId: match.id, nextMove, updatedAt: now.toISOString() } : null,
+    });
+    await reload();
+    queueAutoSave({ download: true });
+    renderToday();
+    bumpToday('win', hero?.role ?? null);
+    state.ui.pausedUntil = Date.now() + FINISH_PAUSE_MS;
+    state.ui.askMode = 'loss';
+    state.ask = emptyAsk();
+    state.timer = { startedAt: null, clicks: 0, keys: 0 };
+    askInput().value = '';
+    renderAsk();
+    saveDraft();
+    toast(savedSign('win'), {
+      ms: SAVED_MS,
+      action: { label: '保存を取り消す', run: () => undoWinMatch(match.id) },
+    });
+  } catch (e) {
+    toast(`保存できませんでした: ${e?.message ?? e}`);
+  } finally {
+    state.ui.saving = false;
+  }
+}
+
+async function undoWinMatch(matchId) {
+  try {
+    await db.deleteMatch(matchId);
+  } catch (e) {
+    toast(`取り消せませんでした: ${e?.message ?? e}`);
+    return;
+  }
+  await reload();
+  queueAutoSave();
+  renderAll();
+  toast('保存を取り消しました');
 }
 
 // 保存の合図(設計書「簡易入力の設計」)。保存直後のトーストに、結果のアイコンと結果名と一言を出す。
@@ -801,7 +929,7 @@ function savedSign(result) {
 function bumpToday(result, role) {
   // 「試合数だけ」では試合数を弾ませる(設計書 F3)
   const cls = state.display.today === 'count' ? 'n' : SCORE_CLASS[result];
-  $(`#today-chip .tally-role[data-role="${role ?? ''}"] .${cls}`)?.classList.add('bump');
+  $(`#today-chip .tally-role[data-role="${tallyKey({ result, role })}"] .${cls}`)?.classList.add('bump');
 }
 
 // 保存の取り消し(設計書 押し間違いへの備え)。試合を消し、答えを問いかけ入力に戻してヒーローの問いを開く。
@@ -959,10 +1087,9 @@ async function toggleTried() {
 
 // 問いの進み: 「記録」(保存前の5問)と「振り返り」の段に分け、いまの段の点だけを出す。
 // 段の中では分母が変わらない。振り返りの段では、記録を「✓ 記録」にたたむ(設計書「簡易入力の設計」)
-function renderAskProgress(total, i) {
-  const before = ASK_BEFORE_SAVE.length;
+function renderAskProgress(total, i, { label = '負けた試合', before = ASK_BEFORE_SAVE.length } = {}) {
   const review = i >= before;
-  const [name, count, at] = review ? ['振り返り', total - before, i - before] : ['記録', before, i];
+  const [name, count, at] = review ? ['振り返り', total - before, i - before] : [label, before, i];
   const dots = h('span', { class: 'step-dots' },
     Array.from({ length: count }, (_, k) => h('i', { class: k < at ? 'on' : k === at ? 'now' : '' })));
   const el = $('#ask-step');
@@ -972,13 +1099,25 @@ function renderAskProgress(total, i) {
     review ? [h('span', { class: 'step-group done' },
       svg('svg', { viewBox: '0 0 12 12', width: 12, height: 12, fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' },
         svg('path', { d: 'M2.5 6.5l2.2 2.2L9.5 3.5' })),
-      '記録'), h('span', { class: 'step-sep' })] : null,
+      label), h('span', { class: 'step-sep' })] : null,
     h('span', { class: 'step-group' }, name, dots));
 }
 
 function renderAsk({ focus = true } = {}) {
   // 「はじめての方へ」は、開いたときに記録が0件なら出す。保存しても消さず、次に開いたときから出さない(入力欄が跳ばないように。設計書 画面設計)
   $('#welcome').hidden = !state.ui.welcome;
+  const isWinMode = state.ui.askMode === 'win' && !state.ask.matchId;
+  $('#ask-mode-row').hidden = !!state.ask.matchId;
+  $('#mode-loss').setAttribute('aria-pressed', String(!isWinMode));
+  $('#mode-win').setAttribute('aria-pressed', String(isWinMode));
+  // 3連敗以上のとき、「負けた」モードの上部に慰めの1行を出す(2026-11-26 ユーザー指定)
+  const streak = currentLossStreak(state.matches);
+  const comfortEl = $('#ask-comfort');
+  const showComfort = streak >= 3 && !state.ask.matchId && !isWinMode;
+  comfortEl.hidden = !showComfort;
+  if (showComfort) {
+    comfortEl.textContent = `${streak}連敗中です。まずは頭の中のモヤモヤをそのまま吐き出して、ひと息つきましょう。`;
+  }
   renderPrevImprovement();
   const steps = askStepsNow();
   const id = state.ask.step;
@@ -1013,7 +1152,11 @@ function renderAsk({ focus = true } = {}) {
   $('#ask-q').textContent = def.q;
   $('#ask-sub').textContent = def.sub ?? '';
   $('#ask-sub').hidden = !def.sub;
-  renderAskProgress(steps.length, i);
+  if (isWinMode) {
+    renderAskProgress(ASK_WIN_BEFORE_SAVE.length, i, { label: '勝った試合', before: ASK_WIN_BEFORE_SAVE.length });
+  } else {
+    renderAskProgress(steps.length, i);
+  }
   const input = askInput();
   input.placeholder = def.example ?? '';
 
@@ -1021,7 +1164,12 @@ function renderAsk({ focus = true } = {}) {
   const cur = answerLabel(id, askAnswer(id));
   const curEl = $('#ask-cur');
   curEl.hidden = !cur;
-  fill(curEl, cur ? ['いまの答え: ', h('b', {}, cur), isTouch() ? '(空のまま決めるとそのまま)' : '(空のまま Enter でそのまま。Tab で書き直す)'] : null);
+  const curHint = isTouch()
+    ? '(空のまま決めるとそのまま)'
+    : def.kind === 'text'
+      ? '(空のまま Enter でそのまま。Shift+Tab で書き直す / Delete で消す)'
+      : '(空のまま Enter でそのまま。打ち直すと上書き / Delete で消す)';
+  fill(curEl, cur ? ['いまの答え: ', h('b', {}, cur), curHint] : null);
 
   renderAskOpts();
   renderAskKeys(def, !!cur);
@@ -1039,18 +1187,21 @@ function renderAskKeys(def, has) {
   const undo = !!state.ask.matchId && askStepsNow().indexOf(state.ask.step) === ASK_BEFORE_SAVE.length;
   const back = undo ? ' 保存を取り消す' : ' 前へ';
   const main = def.kind === 'text'
-    ? [[k('Enter'), ' 次へ'], [k('Shift'), '+', k('Enter'), ' 改行'], ['空で ', k('←'), back]]
+    ? [[k('Enter'), ' 次へ'], [k('Shift'), '+', k('Enter'), ' 改行'], ['空で ', k('Delete'), back]]
     : def.groups
-      ? [[k('Tab'), ' 変換'], [k('Enter'), ' 決める'], [k('/'), ` ${def.browseOpenLabel}`], ['空で ', k('←'), back]]
-      : [[k('Tab'), ' 変換'], [k('Enter'), ' 決める'], ['空で ', k('←'), back]];
+      ? [[k('Tab'), ' 変換'], [k('Enter'), ' 決める'], [k('/'), ` ${def.browseOpenLabel}`], ['空で ', k('Delete'), back]]
+      : [[k('Tab'), ' 変換'], [k('Enter'), ' 決める'], ['空で ', k('Delete'), back]];
   const all = [
     def.kind === 'text' ? [[k('Enter')], '次へ(空ならとばす)'] : [[k('Tab')], '選んでいる候補に変換(もう一度で次の候補)'],
     def.kind === 'text' ? [[k('Shift'), '+', k('Enter')], '改行'] : [[k('↓'), k('↑')], '候補を選ぶ'],
     def.kind === 'text' ? null : [[k('Enter')], `決める${def.optional ? '(空のままならとばす)' : ''}`],
     def.groups ? [[k('/'), ' / ', k('Ctrl'), '+', k('Space')], def.browseOpenLabel] : null,
     def.browseKey ? [[k(def.browseKey)], ` と打って${def.browseOpenLabel}`] : null,
-    has ? [['空で ', k('Tab')], 'いまの答えを書き直す'] : null,
-    [['空で ', k('←'), ' / ', k('Backspace')], undo ? '保存を取り消して、ヒーローの問いに戻る' : '前の問いへ'],
+    !state.ask.matchId ? [['空で ', k('Tab')], '負けた / 勝った を切り替える'] : null,
+    has && def.kind === 'text' ? [['空で ', k('Shift'), '+', k('Tab')], 'いまの答えを書き直す'] : null,
+    def.kind === 'pick' ? [[k('Backspace'), ' / ', k('Delete')], '変換済みの文字を一括削除'] : null,
+    has ? [['空で ', k('Delete')], 'いまの答えを消す(空なら前へ)'] : null,
+    [['空で ', k('Delete'), ' / ', k('←'), ' / ', k('Backspace')], undo ? '保存を取り消して、ヒーローの問いに戻る' : '前の問いへ'],
     [['空で ', k('→')], '次の問いへ'],
     [[k('Alt'), '+', k('1'), '〜', k('4')], '画面の切り替え'],
   ].filter(Boolean);
@@ -1118,9 +1269,18 @@ function renderAskOpts() {
   const empty = !askInput().value.trim();
   const has = !!askAnswer(state.ask.step);
   const send = $('#ask-send');
-  if (def.kind === 'text') send.textContent = empty ? (has ? 'そのまま' : 'とばす') : '次へ';
-  else send.textContent = state.ui.sel >= 0 && opts[state.ui.sel]?.id !== askAnswer(state.ask.step) ? '決める' : has ? 'そのまま' : def.optional ? 'とばす' : '決める';
-  send.classList.toggle('skip', def.kind === 'text' ? empty : state.ui.sel < 0);
+  if (state.ui.askMode === 'win' && !state.ask.matchId && state.ask.step === 'hero') {
+    const picked = state.ui.sel >= 0 || headIds.length > 0;
+    send.textContent = picked ? 'VICTORY を保存' : '飛ばして保存';
+    send.classList.toggle('skip', !picked);
+  } else if (def.kind === 'text') {
+    send.textContent = empty ? (has ? 'そのまま' : 'とばす') : '次へ';
+    send.classList.toggle('skip', empty);
+  } else {
+    const picked = state.ui.sel >= 0 || headIds.length > 0;
+    send.textContent = picked && opts[state.ui.sel]?.id !== askAnswer(state.ask.step) ? '決める' : has ? 'そのまま' : def.optional ? 'とばす' : '決める';
+    send.classList.toggle('skip', !picked);
+  }
 }
 
 // ---------- マップ・ヒーロー一覧オーバーレイ(設計書 F1・F2) ----------
@@ -1241,8 +1401,31 @@ function bindAsk() {
     if (!e.target.closest('button, a, textarea, .opt')) { e.preventDefault(); input.focus(); }
   });
 
+  // ヒーローを Tab で変換した直後に続けて打ったら、空白を挟んで2人目にする(「Tracerg」→「Tracer g」。2026-11-27)
+  // 日本語の変換中は触らず、確定したとき(compositionend)に挟む
+  const spaceAfterConverted = () => {
+    const conv = state.ui.converted;
+    state.ui.converted = null;
+    if (!conv || state.ask.step !== 'hero' || !input.value.startsWith(conv)) return;
+    const rest = input.value.slice(conv.length);
+    if (rest && !/^[\s、,，→]/.test(rest)) input.value = `${conv} ${rest}`;
+  };
+  // 確定の途中で値を書き換えると日本語入力に上書きされるため、確定を終えてから挟む
+  let composing = false;
+  input.addEventListener('compositionstart', () => { composing = true; });
+  input.addEventListener('compositionend', () => {
+    setTimeout(() => {
+      composing = false;
+      if (!state.ui.converted) return;
+      spaceAfterConverted();
+      input.setSelectionRange(input.value.length, input.value.length);
+      input.dispatchEvent(new Event('input'));
+    });
+  });
+
   input.addEventListener('input', (e) => {
     const def = stepDef(state.ask.step);
+    if (!e.isComposing && !composing) spaceAfterConverted();
     // 打ち直したら、Tab で変換する前の文字ではなく、いまの文字で絞る
     state.ui.typed = null;
     // 漢字に変換する前に打ったかなを覚えておく(searchTyped)
@@ -1258,7 +1441,10 @@ function bindAsk() {
     // 結果などは、候補が1つに絞れるまで選ばない(d だけでは DRAW と DEFEAT を決めない。設計書 F3)
     if (def.scale) state.ui.sel = scaleMatch(def, input.value);
     // ヒーローを空白で区切り終えたところ(「tracer 」)では、最近の候補を選ばない(Enter で決まったヒーローだけを決める)
-    else if (def.kind === 'pick') state.ui.sel = (heroInput(input.value)?.query ?? input.value).trim() && (def.firstSelected || askCandidates(def).length === 1) ? 0 : -1;
+    else if (def.kind === 'pick') {
+      const typing = !!(heroInput(input.value)?.query ?? input.value).trim();
+      state.ui.sel = typing ? defaultPickSel(def, askCandidates(def)) : -1;
+    }
     renderAskOpts();
     renderTextCount($('#ask-count'), def.kind === 'text' ? input.value.length : 0);
     growAsk();
@@ -1293,8 +1479,41 @@ function bindAsk() {
       renderAskKeys(def, !!askAnswer(state.ask.step));
       return;
     }
-    // 入力欄が空のときだけ、← と Backspace・Delete で前の問いへ、→ で次の問いへ(答えてある問いだけ)
-    if (empty && ['ArrowLeft', 'Backspace', 'Delete'].includes(e.key)) {
+    // Backspace / Delete: 選択の問いで変換済み・確定済みの語を1回で一括削除(複数ヒーローは末尾の1人ずつ)。空欄の Delete はいまの答えを消して空なら前の問いへ(設計書「簡易入力の設計」)
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      if (e.key === 'Delete' && empty) {
+        e.preventDefault();
+        if (askAnswer(state.ask.step)) clearAnswer(state.ask.step);
+        else askBack({ repeat: e.repeat });
+        return;
+      }
+      const atEnd = input.selectionStart === input.value.length && input.selectionEnd === input.value.length;
+      if (!empty && def.kind === 'pick' && atEnd) {
+        const hi = heroInput(state.ui.typed ?? input.value);
+        if (state.ui.typed !== null || def.items?.some((x) => x.name === input.value)) {
+          e.preventDefault();
+          const head = hi?.head ?? '';
+          input.value = head ? `${head} ` : '';
+          input.dispatchEvent(new Event('input'));
+          return;
+        }
+        if (hi && hi.ids.length > 0 && !hi.query) {
+          e.preventDefault();
+          const rest = hi.ids.slice(0, -1);
+          input.value = rest.length ? `${rest.map(heroName).join(' ')} ` : '';
+          input.dispatchEvent(new Event('input'));
+          return;
+        }
+        if (e.key === 'Delete') {
+          e.preventDefault();
+          input.value = '';
+          input.dispatchEvent(new Event('input'));
+          return;
+        }
+      }
+    }
+    // 入力欄が空のときだけ、← と Backspace で前の問いへ、→ で次の問いへ(答えてある問いだけ)
+    if (empty && ['ArrowLeft', 'Backspace'].includes(e.key)) {
       e.preventDefault();
       askBack({ repeat: e.repeat });
       return;
@@ -1304,10 +1523,16 @@ function bindAsk() {
       if (askAnswer(state.ask.step) || def.kind === 'text' || def.optional) askNext();
       return;
     }
-    // Tab(空のとき): いまの答えを入力欄に出して書き直す
-    if (e.key === 'Tab' && !e.shiftKey && empty && askAnswer(state.ask.step)) {
+    // Tab(保存前のどの問いでも空欄なら): 負けた / 勝った を切り替える(2026-11-27 変更。以前は1問目だけ)
+    if (e.key === 'Tab' && !e.shiftKey && empty && !state.ask.matchId) {
       e.preventDefault();
-      input.value = def.kind === 'pick' ? answerLabel(state.ask.step, askAnswer(state.ask.step)) : askAnswer(state.ask.step);
+      setAskMode(state.ui.askMode === 'win' ? 'loss' : 'win');
+      return;
+    }
+    // Shift+Tab(自由記述が空のとき): いまの答えを入力欄に出して書き直す(2026-11-26 ユーザー指定)
+    if (e.key === 'Tab' && e.shiftKey && empty && def.kind === 'text' && askAnswer(state.ask.step)) {
+      e.preventDefault();
+      input.value = askAnswer(state.ask.step);
       input.dispatchEvent(new Event('input'));
       return;
     }
@@ -1333,6 +1558,7 @@ function bindAsk() {
         return;
       }
       input.value = asText(list[state.ui.sel]);
+      if (head !== undefined) state.ui.converted = input.value;
       renderAskOpts();
       queueDraft();
       return;
@@ -1378,6 +1604,8 @@ const ROLE_SHAPES = {
     svg('path', { d: `M${x} 18.2V4.6c0-2.1 2-3.9 2.5-3.9s2.5 1.8 2.5 3.9v13.6zM${x} 19.6h5v3.8h-5z` })),
   // 十字
   support: () => [svg('path', { d: 'M9.5 3h5v6.5H21v5h-6.5V21h-5v-6.5H3v-5h6.5z' })],
+  // 王冠(ロールを記録しない勝利の区分。設計書 F3)
+  win: () => [svg('path', { d: 'M3 8l4.5 4L12 5l4.5 7L21 8l-2 10H5z' })],
 };
 
 function roleIcon(roleId, size = 20) {
@@ -1931,6 +2159,7 @@ function renderEditor(m, model, original) {
 
 function renderSettings() {
   for (const r of document.querySelectorAll('input[name="pref-today"]')) r.checked = r.value === state.display.today;
+  for (const r of document.querySelectorAll('input[name="pref-theme"]')) r.checked = r.value === state.display.theme;
   renderBackup();
   renderAutoSave();
 }
@@ -2091,8 +2320,16 @@ async function setDisplay(key, value) {
   } catch (e) {
     toast(`設定を保存できませんでした: ${e?.message ?? e}`);
   }
+  applyTheme();
   renderToday();
   queueAutoSave();
+}
+
+// 画面の色(設計書 画面設計「夜の手帳」)。初期は暗い。about.html でも同じ色で開けるよう、ブラウザ内の localStorage にも写す
+function applyTheme() {
+  const theme = state.display.theme === 'light' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = theme;
+  try { localStorage.setItem(THEME_STORAGE_KEY, theme); } catch { /* 保存できなくても表示は変える */ }
 }
 
 // ---------- 記録のたびの自動ダウンロード(F8。フォルダを選べないブラウザ) ----------

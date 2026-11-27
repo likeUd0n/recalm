@@ -1,6 +1,6 @@
 // 画面に依存しない計算。後で node --test から読み込めるよう DOM を使わない。
 import {
-  TIME_SLOTS, PEAK_SLOT_IDS, ROLES, UNKNOWN_ROLE_LABEL, DAY_START_HOUR,
+  TIME_SLOTS, PEAK_SLOT_IDS, ROLES, WIN_TALLY_LABEL, UNKNOWN_ROLE_LABEL, DAY_START_HOUR,
   BACKUP_STORES, BACKUP_STALE_DAYS, DEVICE_META_KEYS, REFERENCE_MIN_GAMES,
   SKILL_GAPS, SKILL_GAP_ALIASES, DRAFT_MAX_AGE_HOURS,
   SESSION_GAP_MINUTES, SESSION_ELAPSED_STEP_MINUTES,
@@ -56,18 +56,20 @@ export function matchesNeedingUpdate(matches) {
     .map(([, b]) => b);
 }
 
-// 累計勝敗をまとめる区分。ロール別(ロールのない以前の記録は空文字の区分にまとめる)。
-function tallyKey(m) {
-  return m.role ?? '';
+// 累計勝敗をまとめる区分。ロール別。ロールを記録しない勝利は 'win'、ロールのない負け・引き分けは空文字にまとめる(設計書 F3)。
+export function tallyKey(m) {
+  if (m.role) return m.role;
+  return m.result === 'win' ? 'win' : '';
 }
 
-// 区分の表示名。ロール名か、「ロール不明」。
+// 区分の表示名。ロール名、「勝利」、または「ロール不明」。
 export function tallyLabel(key) {
+  if (key === 'win') return WIN_TALLY_LABEL;
   return ROLES.find((r) => r.id === key)?.label ?? UNKNOWN_ROLE_LABEL;
 }
 
-// 区分の並び順: Tank, DPS, Support, ロール不明。
-const TALLY_ORDER = [...ROLES.map((r) => r.id), ''];
+// 区分の並び順: Tank, DPS, Support, 勝利, ロール不明。
+const TALLY_ORDER = [...ROLES.map((r) => r.id), 'win', ''];
 
 // 試合ごとに、その1日(0:00区切り)の同じ区分での累計勝敗(その試合を含む)を返す。
 // 戻り値は Map<matchId, { key, wins, losses, draws }>。
@@ -235,17 +237,30 @@ export const LEGACY_REVIEW_FIELDS = {
 
 // ---------- 問いかけ入力(設計書「簡易入力の設計」) ----------
 
-// 保存する前に聞く問い(主観の整理 → 事実)。hero に答えると試合を保存する。
-export const ASK_BEFORE_SAVE = ['memo', 'result', 'skillGap', 'map', 'hero'];
+// 保存する前に聞く問い(負けメイン: 主観の整理 → マップ → ヒーロー)。hero に答えるか飛ばすと DEFEAT で試合を保存する。
+export const ASK_BEFORE_SAVE = ['memo', 'map', 'hero'];
+// 勝ったときの問い(反省点・次に試すこと → ヒーロー。どちらも任意、hero に答えるか飛ばすと VICTORY で試合を保存する)。
+export const ASK_WIN_BEFORE_SAVE = ['memo', 'hero'];
 
 // 問いの順番。振り返りの問いはどの結果でも1問(設計書 F6)。
-export function askSteps(result) {
+export function askSteps(result = 'loss') {
   const review = {
     loss: LOSS_REVIEW_FIELDS.map((f) => f.key),
     win: WIN_REVIEW_FIELDS.map((f) => f.key),
     draw: DRAW_REVIEW_FIELDS.map((f) => f.key),
-  }[result] ?? [];
+  }[result ?? 'loss'] ?? [];
   return [...ASK_BEFORE_SAVE, ...review];
+}
+
+// 直近の連敗数(設計書「簡易入力の設計」)。新しい試合から見て連続して DEFEAT の数を返す。
+export function currentLossStreak(matches) {
+  const sorted = [...matches].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  let n = 0;
+  for (const m of sorted) {
+    if (m.result === 'loss') n += 1;
+    else break;
+  }
+  return n;
 }
 
 // ---------- 入力途中の下書き(設計書「簡易入力の設計」) ----------

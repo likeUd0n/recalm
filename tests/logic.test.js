@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {
   dayKeyOf, normalizeMatch, matchesNeedingUpdate, runningTallies, dailyTally, tallyText,
   shiftDayKey, reviewRates, isPeakTime, isWeekendDay, matchTimeTags, timeSlotOf,
-  buildBackup, parseBackup, backupStatus, statsScope, sessionElapsedStats, winRateHold, splitHeroInput, weekStartKey, triedSinceLastMatch, triedStats, askSteps, isAskEmpty, buildDraft, restoreDraft,
+  buildBackup, parseBackup, backupStatus, statsScope, sessionElapsedStats, winRateHold, splitHeroInput, weekStartKey, triedSinceLastMatch, triedStats, currentLossStreak, askSteps, isAskEmpty, buildDraft, restoreDraft,
   searchByName, roleRecords, reviewEntries, latestNextMove,
 } from '../js/logic.js';
 
@@ -44,6 +44,21 @@ test('5試合の試合ごとの累計(手書きの「Tank:1-2」の行にあた�
   assert.equal(text('m3'), 'Tank:1-1');
   assert.equal(text('m4'), 'DPS:1-0');
   assert.equal(text('m5'), 'Tank:0-1'); // 0:00 を過ぎたので累計はリセット
+});
+
+test('ロールなしの勝利は「ロール不明」ではなく「勝利」区分にまとめる', () => {
+  const ms = [
+    match('w1', at(2026, 11, 26, 20, 0), null, 'win'),
+    match('w2', at(2026, 11, 26, 20, 20), null, 'win'),
+    match('l1', at(2026, 11, 26, 20, 40), null, 'loss'),
+    match('t1', at(2026, 11, 26, 21, 0), 'tank', 'loss'),
+  ];
+  assert.deepEqual(dailyTally(ms, '2026-11-26').map((t) => tallyText(t)), ['Tank 0-1', '勝利 2-0', 'ロール不明 0-1']);
+  const running = runningTallies(ms);
+  assert.equal(tallyText(running.get('w1'), ':'), '勝利:1-0');
+  assert.equal(tallyText(running.get('w2'), ':'), '勝利:2-0');
+  assert.equal(tallyText(running.get('l1'), ':'), 'ロール不明:0-1');
+  assert.deepEqual(roleRecords(ms).map((t) => `${t.key}:${t.wins}-${t.losses}`), ['win:2-0', 'tank:0-1', ':0-1']);
 });
 
 test('入力順に並んでいなくても、入力時刻の順で数える', () => {
@@ -320,11 +335,20 @@ test('バックアップを促す条件: 記録があり、未実施か7日以�
 
 // ---------- 問いかけ入力と入力途中の下書き ----------
 
-test('問いの順番: 気持ち → 結果 → マッチの質 → マップ → ヒーロー、続けて結果ごとの振り返り', () => {
-  assert.deepEqual(askSteps(null), ['memo', 'result', 'skillGap', 'map', 'hero']);
-  assert.deepEqual(askSteps('loss').slice(5), ['improvement']);
-  assert.deepEqual(askSteps('win').slice(5), ['nextMove']);
-  assert.deepEqual(askSteps('draw').slice(5), ['nextMove']);
+test('問いの順番: 負けメインの気持ち → マップ → ヒーロー、続けて結果ごとの振り返り', () => {
+  assert.deepEqual(askSteps(null), ['memo', 'map', 'hero', 'improvement']);
+  assert.deepEqual(askSteps('loss').slice(3), ['improvement']);
+  assert.deepEqual(askSteps('win').slice(3), ['nextMove']);
+  assert.deepEqual(askSteps('draw').slice(3), ['nextMove']);
+});
+
+test('currentLossStreak: 直近の連敗数を数える(勝ち・引き分けで止まる)', () => {
+  const m = (id, h, result) => match(id, at(2026, 11, 26, h), null, result);
+  assert.equal(currentLossStreak([]), 0);
+  assert.equal(currentLossStreak([m('1', 20, 'loss'), m('2', 21, 'loss'), m('3', 22, 'loss')]), 3);
+  // 入力順がバラバラでも新しい順で数える。勝ち・引き分けでリセット
+  assert.equal(currentLossStreak([m('3', 22, 'loss'), m('1', 20, 'loss'), m('2', 21, 'win')]), 1);
+  assert.equal(currentLossStreak([m('1', 20, 'loss'), m('2', 21, 'draw')]), 0);
 });
 
 const emptyAsk = () => ({
