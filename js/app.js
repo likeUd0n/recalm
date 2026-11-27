@@ -1408,15 +1408,22 @@ function bindAsk() {
     const rest = input.value.slice(conv.length);
     if (rest && !/^[\s、,，→]/.test(rest)) input.value = `${conv} ${rest}`;
   };
+  // 確定の途中で値を書き換えると日本語入力に上書きされるため、確定を終えてから挟む
+  let composing = false;
+  input.addEventListener('compositionstart', () => { composing = true; });
   input.addEventListener('compositionend', () => {
-    if (!state.ui.converted) return;
-    spaceAfterConverted();
-    input.dispatchEvent(new Event('input'));
+    setTimeout(() => {
+      composing = false;
+      if (!state.ui.converted) return;
+      spaceAfterConverted();
+      input.setSelectionRange(input.value.length, input.value.length);
+      input.dispatchEvent(new Event('input'));
+    });
   });
 
   input.addEventListener('input', (e) => {
     const def = stepDef(state.ask.step);
-    if (!e.isComposing) spaceAfterConverted();
+    if (!e.isComposing && !composing) spaceAfterConverted();
     // 打ち直したら、Tab で変換する前の文字ではなく、いまの文字で絞る
     state.ui.typed = null;
     // 漢字に変換する前に打ったかなを覚えておく(searchTyped)
