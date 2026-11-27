@@ -1195,7 +1195,7 @@ function renderAskKeys(def, has) {
     def.kind === 'text' ? null : [[k('Enter')], `決める${def.optional ? '(空のままならとばす)' : ''}`],
     def.groups ? [[k('/'), ' / ', k('Ctrl'), '+', k('Space')], def.browseOpenLabel] : null,
     def.browseKey ? [[k(def.browseKey)], ` と打って${def.browseOpenLabel}`] : null,
-    !state.ask.matchId && state.ask.step === 'memo' ? [['空で ', k('Tab')], '負けた / 勝った を切り替える'] : null,
+    !state.ask.matchId ? [['空で ', k('Tab')], '負けた / 勝った を切り替える'] : null,
     has && def.kind === 'text' ? [['空で ', k('Shift'), '+', k('Tab')], 'いまの答えを書き直す'] : null,
     def.kind === 'pick' ? [[k('Backspace'), ' / ', k('Delete')], '変換済みの文字を一括削除'] : null,
     has ? [['空で ', k('Delete')], 'いまの答えを消す(空なら前へ)'] : null,
@@ -1399,8 +1399,24 @@ function bindAsk() {
     if (!e.target.closest('button, a, textarea, .opt')) { e.preventDefault(); input.focus(); }
   });
 
+  // ヒーローを Tab で変換した直後に続けて打ったら、空白を挟んで2人目にする(「Tracerg」→「Tracer g」。2026-11-27)
+  // 日本語の変換中は触らず、確定したとき(compositionend)に挟む
+  const spaceAfterConverted = () => {
+    const conv = state.ui.converted;
+    state.ui.converted = null;
+    if (!conv || state.ask.step !== 'hero' || !input.value.startsWith(conv)) return;
+    const rest = input.value.slice(conv.length);
+    if (rest && !/^[\s、,，→]/.test(rest)) input.value = `${conv} ${rest}`;
+  };
+  input.addEventListener('compositionend', () => {
+    if (!state.ui.converted) return;
+    spaceAfterConverted();
+    input.dispatchEvent(new Event('input'));
+  });
+
   input.addEventListener('input', (e) => {
     const def = stepDef(state.ask.step);
+    if (!e.isComposing) spaceAfterConverted();
     // 打ち直したら、Tab で変換する前の文字ではなく、いまの文字で絞る
     state.ui.typed = null;
     // 漢字に変換する前に打ったかなを覚えておく(searchTyped)
@@ -1498,8 +1514,8 @@ function bindAsk() {
       if (askAnswer(state.ask.step) || def.kind === 'text' || def.optional) askNext();
       return;
     }
-    // Tab(1問目の空欄): 負けた / 勝った を切り替える(2026-11-26 ユーザー指定)
-    if (e.key === 'Tab' && !e.shiftKey && empty && !state.ask.matchId && state.ask.step === 'memo') {
+    // Tab(保存前のどの問いでも空欄なら): 負けた / 勝った を切り替える(2026-11-27 変更。以前は1問目だけ)
+    if (e.key === 'Tab' && !e.shiftKey && empty && !state.ask.matchId) {
       e.preventDefault();
       setAskMode(state.ui.askMode === 'win' ? 'loss' : 'win');
       return;
@@ -1533,6 +1549,7 @@ function bindAsk() {
         return;
       }
       input.value = asText(list[state.ui.sel]);
+      if (head !== undefined) state.ui.converted = input.value;
       renderAskOpts();
       queueDraft();
       return;
