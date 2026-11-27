@@ -453,11 +453,20 @@ function askCandidatesFor(def, q) {
   const recent = def.items === state.master.heroes ? heroUsage(state.matches, state.slots).recent
     : def.items === state.master.maps ? recentMapIds(state.matches) : [];
   const list = searchTyped(def.items, q, recent).slice(0, 8);
-  // map・hero(まっぷ・ひーろー も)を打つ途中なら、一覧を開く候補を最後に足す(設計書 F1・F2)
+  // map・hero(まっぷ・ひーろー も)を打つ途中なら、一覧を開く候補を先頭に出す(設計書 F1・F2)
   const cmd = toHiragana(q.trim().toLowerCase());
   return def.browseKey && cmd && browseKeys(def).some((k) => k.startsWith(cmd))
-    ? [...list, { id: BROWSE_CMD, name: def.browseKey, label: def.browseOpenLabel }]
+    ? [{ id: BROWSE_CMD, name: def.browseKey, label: def.browseOpenLabel }, ...list]
     : list;
+}
+
+// 候補リストの初期選択位置。先頭が一覧を開く候補なら、他の候補があるときは2番目(最初の実候補)を選ぶ
+function defaultPickSel(def, list) {
+  if (!list.length) return -1;
+  const hasBrowse = list[0].id === BROWSE_CMD;
+  const realCount = hasBrowse ? list.length - 1 : list.length;
+  if (!def.firstSelected && realCount !== 1 && list.length !== 1) return -1;
+  return hasBrowse && list.length > 1 ? 1 : 0;
 }
 
 // 一覧を開く入力: 英字の map・hero と、かなの まっぷ・ひーろー(カタカナはひらがなにそろえて比べる)
@@ -679,9 +688,19 @@ async function askCommit({ byKey = false } = {}) {
   // 1人目と違うロールのヒーローを打っているあいだは決めない(候補の下に理由を出している)
   if (hi?.blocked.length) return;
   const typing = hi ? !!hi.query : !!text;
-  const c = list[state.ui.sel] ?? (typing && (def.firstSelected || list.length === 1) ? list[0] : null);
+  const fallbackIdx = typing ? defaultPickSel(def, list) : -1;
+  const c = list[state.ui.sel] ?? (fallbackIdx >= 0 ? list[fallbackIdx] : null);
   if (c?.id === BROWSE_CMD) openBrowse({ byInput: true });
-  else if (c) await setAnswer(id, hi ? withHeadHeroes(c.id) : c.id);
+  // ヒーローの問いで候補を選んだときは即保存せず、入力欄へ追加して末尾に空白を入れ、複数ヒーローを続けて打てるようにする(設計書 F2)
+  else if (c && id === 'hero') {
+    const input = askInput();
+    input.value = `${withHeadHeroes(c.id).map(heroName).join(' ')} `;
+    state.ui.typed = null;
+    state.ui.sel = -1;
+    renderAskOpts();
+    growAsk();
+    queueDraft();
+  } else if (c) await setAnswer(id, c.id);
   // 「tracer 」のように区切りで終えたら、決まったヒーローだけで決める
   else if (hi?.ids.length && !hi.query) await setAnswer(id, hi.ids);
   else if (!text && has) await askNext();
@@ -1166,10 +1185,10 @@ function renderAskKeys(def, has) {
   const undo = !!state.ask.matchId && askStepsNow().indexOf(state.ask.step) === ASK_BEFORE_SAVE.length;
   const back = undo ? ' 保存を取り消す' : ' 前へ';
   const main = def.kind === 'text'
-    ? [[k('Enter'), ' 次へ'], [k('Shift'), '+', k('Enter'), ' 改行'], ['空で ', k('←'), back]]
+    ? [[k('Enter'), ' 次へ'], [k('Shift'), '+', k('Enter'), ' 改行'], ['空で ', k('Delete'), back]]
     : def.groups
-      ? [[k('Tab'), ' 変換'], [k('Enter'), ' 決める'], [k('/'), ` ${def.browseOpenLabel}`], ['空で ', k('←'), back]]
-      : [[k('Tab'), ' 変換'], [k('Enter'), ' 決める'], ['空で ', k('←'), back]];
+      ? [[k('Tab'), ' 変換'], [k('Enter'), ' 決める'], [k('/'), ` ${def.browseOpenLabel}`], ['空で ', k('Delete'), back]]
+      : [[k('Tab'), ' 変換'], [k('Enter'), ' 決める'], ['空で ', k('Delete'), back]];
   const all = [
     def.kind === 'text' ? [[k('Enter')], '次へ(空ならとばす)'] : [[k('Tab')], '選んでいる候補に変換(もう一度で次の候補)'],
     def.kind === 'text' ? [[k('Shift'), '+', k('Enter')], '改行'] : [[k('↓'), k('↑')], '候補を選ぶ'],
@@ -1178,8 +1197,9 @@ function renderAskKeys(def, has) {
     def.browseKey ? [[k(def.browseKey)], ` と打って${def.browseOpenLabel}`] : null,
     !state.ask.matchId && state.ask.step === 'memo' ? [['空で ', k('Tab')], '負けた / 勝った を切り替える'] : null,
     has && def.kind === 'text' ? [['空で ', k('Shift'), '+', k('Tab')], 'いまの答えを書き直す'] : null,
-    has ? [['空で ', k('Delete')], 'いまの答えを消す'] : null,
-    [['空で ', k('←'), ' / ', k('Backspace')], undo ? '保存を取り消して、ヒーローの問いに戻る' : '前の問いへ'],
+    def.kind === 'pick' ? [[k('Delete')], '変換済みの文字を一括削除'] : null,
+    has ? [['空で ', k('Delete')], 'いまの答えを消す(空なら前へ)'] : null,
+    [['空で ', k('Delete'), ' / ', k('←'), ' / ', k('Backspace')], undo ? '保存を取り消して、ヒーローの問いに戻る' : '前の問いへ'],
     [['空で ', k('→')], '次の問いへ'],
     [[k('Alt'), '+', k('1'), '〜', k('4')], '画面の切り替え'],
   ].filter(Boolean);
@@ -1248,15 +1268,16 @@ function renderAskOpts() {
   const has = !!askAnswer(state.ask.step);
   const send = $('#ask-send');
   if (state.ui.askMode === 'win' && !state.ask.matchId && state.ask.step === 'hero') {
-    const picked = state.ui.sel >= 0;
+    const picked = state.ui.sel >= 0 || headIds.length > 0;
     send.textContent = picked ? 'VICTORY を保存' : '飛ばして保存';
     send.classList.toggle('skip', !picked);
   } else if (def.kind === 'text') {
     send.textContent = empty ? (has ? 'そのまま' : 'とばす') : '次へ';
     send.classList.toggle('skip', empty);
   } else {
-    send.textContent = state.ui.sel >= 0 && opts[state.ui.sel]?.id !== askAnswer(state.ask.step) ? '決める' : has ? 'そのまま' : def.optional ? 'とばす' : '決める';
-    send.classList.toggle('skip', state.ui.sel < 0);
+    const picked = state.ui.sel >= 0 || headIds.length > 0;
+    send.textContent = picked && opts[state.ui.sel]?.id !== askAnswer(state.ask.step) ? '決める' : has ? 'そのまま' : def.optional ? 'とばす' : '決める';
+    send.classList.toggle('skip', !picked);
   }
 }
 
@@ -1395,7 +1416,10 @@ function bindAsk() {
     // 結果などは、候補が1つに絞れるまで選ばない(d だけでは DRAW と DEFEAT を決めない。設計書 F3)
     if (def.scale) state.ui.sel = scaleMatch(def, input.value);
     // ヒーローを空白で区切り終えたところ(「tracer 」)では、最近の候補を選ばない(Enter で決まったヒーローだけを決める)
-    else if (def.kind === 'pick') state.ui.sel = (heroInput(input.value)?.query ?? input.value).trim() && (def.firstSelected || askCandidates(def).length === 1) ? 0 : -1;
+    else if (def.kind === 'pick') {
+      const typing = !!(heroInput(input.value)?.query ?? input.value).trim();
+      state.ui.sel = typing ? defaultPickSel(def, askCandidates(def)) : -1;
+    }
     renderAskOpts();
     renderTextCount($('#ask-count'), def.kind === 'text' ? input.value.length : 0);
     growAsk();
@@ -1430,12 +1454,21 @@ function bindAsk() {
       renderAskKeys(def, !!askAnswer(state.ask.step));
       return;
     }
-    // 入力欄が空のとき: Delete はいまの答えがあれば消し、空なら前の問いへ(電卓方式。2026-11-26 ユーザー指定)
-    if (empty && e.key === 'Delete') {
-      e.preventDefault();
-      if (askAnswer(state.ask.step)) clearAnswer(state.ask.step);
-      else askBack({ repeat: e.repeat });
-      return;
+    // Delete: 選択の問いで変換済み(またはカーソル末尾)なら1回で一括削除、空欄ならいまの答えを消して空なら前の問いへ(設計書「簡易入力の設計」)
+    if (e.key === 'Delete') {
+      if (empty) {
+        e.preventDefault();
+        if (askAnswer(state.ask.step)) clearAnswer(state.ask.step);
+        else askBack({ repeat: e.repeat });
+        return;
+      }
+      const atEnd = input.selectionStart === input.value.length && input.selectionEnd === input.value.length;
+      if (def.kind === 'pick' && (state.ui.typed !== null || atEnd)) {
+        e.preventDefault();
+        input.value = '';
+        input.dispatchEvent(new Event('input'));
+        return;
+      }
     }
     // 入力欄が空のときだけ、← と Backspace で前の問いへ、→ で次の問いへ(答えてある問いだけ)
     if (empty && ['ArrowLeft', 'Backspace'].includes(e.key)) {
